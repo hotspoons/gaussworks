@@ -1,0 +1,60 @@
+# Splat pipeline workgroup: LWS group of GPU pods sharing /workspace.
+# Connect to the leader, then e.g.:
+#   devpod launch python -m splatpipe.cli train --chunks /workspace/data/run1/chunks
+# Each rank claims chunks[RANK::WORLD_SIZE] and pins LOCAL_RANK's GPU.
+#
+# The three easy-to-miss settings (per ai-dev-pod docs/DISTRIBUTED.md):
+# RWX data PVC, memory-backed /dev/shm, IPC_LOCK for RDMA.
+apiVersion: ai.patapsco.ai/v1alpha1
+kind: ZipspaceDeployment
+metadata:
+  name: splat-devpod
+spec:
+  deploymentType: LWS
+
+  # Shared by leader AND workers at /workspace — must be ReadWriteMany.
+  # Holds extracted frames, colmap DBs, and chunk outputs; 8K captures are fat.
+  volumeType: pvc
+  dataPvcSpec:
+    accessModes: [ReadWriteMany]
+    storageClassName: cephfs
+    size: 2Ti
+
+  runtimeConfig:
+    runtime: ai-dev-pod
+    containerName: workspace
+    image: harbor.tools.basedweights.com/patapsco.ai/splat-pipeline:0.1.0
+    workingDir: /workspace
+
+    # Leader idles for interactive use; workers wait for `devpod launch` jobs.
+    command: ["/usr/local/bin/devpod"]
+    leaderArgs: ["idle"]
+    workerArgs: ["agent"]
+
+    # Sized for the L40S pool; bump for the A100/H200 pools.
+    resources:
+      nodes: 4
+      gpusPerNode: 4
+
+    # Chunk training is embarrassingly parallel (no collectives), but keep the
+    # NCCL config platform-standard so the same group can run torch jobs.
+    nccl:
+      ibDisable: 0
+      socketIFName: "eth0,en,eth,em,bond"
+
+    # kubelet default /dev/shm is 64MiB; NCCL init needs a real one.
+    volumes:
+      - name: shm
+        emptyDir: {medium: Memory}
+    volumeMounts:
+      - name: shm
+        mountPath: /dev/shm
+
+    containerCaps:
+      primary:
+        drop: [ALL]
+        add: [IPC_LOCK]
+
+  topologyConfig:
+    annotations:
+      leaderworkerset.sigs.k8s.io/exclusive-topology: topology.kubernetes.io/zone
