@@ -4,10 +4,11 @@ Turns wide-angle / 360 driving (and hiking) footage into chunked, geo-aligned
 3D Gaussian Splat reconstructions. First target: the back-road network between
 Crofton and Annapolis (see `configs/md-backroads.yaml`).
 
-Lives in trailworks as a subdir for now, but is deliberately self-contained
-(own justfile, own package, own container, no imports from `pipeline.*`) so it
-can be pulled out into its own repo later. Outputs are geo-aligned (ENU), so
-they can eventually feed trailworks as a detail layer.
+Canonical repo: https://gitlab.tools.basedweights.com/richard.siomporas/splatworks-pipeline
+(worked on locally as a clone under `trailworks/ext/`). Self-contained: own
+justfile, package, and container; Apache-2.0 (see LICENSE and THIRD_PARTY.md).
+Outputs are geo-aligned (ENU), so they can eventually feed trailworks as a
+detail layer.
 
 ## Pipeline
 

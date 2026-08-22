@@ -1,0 +1,59 @@
+# Single-GPU remote-dev Zipspace for interactive pipeline work (VS Code plugin
+# connects via the platform tunnel; zip-friends init provides the connect bins).
+# Modeled on the test-zipspace example in the default namespace; image is the
+# published (non-snapshot) ai-dev-pod. NOTE: this cluster (rich-cluster) serves
+# the CRD under the user-scoped group richard-siomporas.patapsco.ai; the main
+# platform group in deploy/zipspace.yaml is ai.patapsco.ai.
+apiVersion: richard-siomporas.patapsco.ai/v1alpha1
+kind: ZipspaceDeployment
+metadata:
+  name: splat-devpod
+  namespace: default
+  annotations:
+    aictl.patapsco.ai/remote-dev: "true"
+    aictl.patapsco.ai/runtime-mode: dev-gpu-cluster
+    app: remote-dev
+    patapsco.ai/created-by: richard.siomporas
+  labels:
+    aictl.patapsco.ai/remote-dev: "true"
+    aictl.patapsco.ai/runtime-mode: dev-gpu-cluster
+    app: remote-dev
+spec:
+  deploymentType: Pod
+  volumeType: pvc
+  dataPvcSpec:
+    accessModes: [ReadWriteOnce]   # single pod; RWX only needed for LWS groups
+    ephemeral: false
+    size: 500Gi
+    storageClassName: cephfs
+  runtimeConfig:
+    runtime: generic
+    containerName: dev
+    image: harbor.tools.basedweights.com/patapsco.ai/ai-dev-pod:0.12.0
+    workingDir: /workspace
+    path:
+      rootPath: /workspace
+    servingTopology: HeadOnly
+    leaderCommand: ["/usr/local/bin/devpod", "idle"]
+    initContainers:
+      - name: zip-friends-init
+        image: harbor.tools.basedweights.com/patapsco.ai/zip-friends:0.1.0
+        env:
+          - name: BIN_DEST
+            value: /opt/bin
+        volumeMounts:
+          - mountPath: /opt/bin
+            name: zip-friends-bins
+    resources:
+      nodes: 1
+      gpusPerNode: 1
+    volumes:
+      - name: zip-friends-bins
+        emptyDir: {}
+      - name: shm
+        emptyDir: {medium: Memory}
+    volumeMounts:
+      - mountPath: /opt/bin
+        name: zip-friends-bins
+      - mountPath: /dev/shm
+        name: shm
