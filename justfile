@@ -1,9 +1,9 @@
-# splats — task recipes (https://just.systems)
+# gaussworks — task recipes (https://just.systems)
 # Self-contained: run from splats/, does not use the trailworks root justfile.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-image := "harbor.tools.basedweights.com/patapsco.ai/splat-pipeline"
+image := "harbor.tools.basedweights.com/patapsco.ai/gaussworks"
 version := "0.1.0"
 
 # list recipes

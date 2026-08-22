@@ -8,7 +8,7 @@
 apiVersion: ai.patapsco.ai/v1alpha1
 kind: ZipspaceDeployment
 metadata:
-  name: splat-devpod
+  name: gaussworks-lws
 spec:
   deploymentType: LWS
 
@@ -23,7 +23,7 @@ spec:
   runtimeConfig:
     runtime: ai-dev-pod
     containerName: workspace
-    image: harbor.tools.basedweights.com/patapsco.ai/splat-pipeline:0.1.0
+    image: harbor.tools.basedweights.com/patapsco.ai/gaussworks:0.1.0
     workingDir: /workspace
 
     # Leader idles for interactive use; workers wait for `devpod launch` jobs.

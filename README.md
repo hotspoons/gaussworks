@@ -1,10 +1,10 @@
-# splats — car-mounted 360 capture → gaussian splat pipeline
+# gaussworks — car-mounted 360 capture → gaussian splat pipeline
 
 Turns wide-angle / 360 driving (and hiking) footage into chunked, geo-aligned
 3D Gaussian Splat reconstructions. First target: the back-road network between
 Crofton and Annapolis (see `configs/md-backroads.yaml`).
 
-Canonical repo: https://gitlab.tools.basedweights.com/richard.siomporas/splatworks-pipeline
+Canonical repo: https://github.com/hotspoons/gaussworks (mirrored on internal GitLab)
 (worked on locally as a clone under `trailworks/ext/`). Self-contained: own
 justfile, package, and container; Apache-2.0 (see LICENSE and THIRD_PARTY.md).
 Outputs are geo-aligned (ENU), so they can eventually feed trailworks as a

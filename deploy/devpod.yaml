@@ -7,7 +7,7 @@
 apiVersion: richard-siomporas.patapsco.ai/v1alpha1
 kind: ZipspaceDeployment
 metadata:
-  name: splat-devpod
+  name: gaussworks-devpod
   namespace: default
   annotations:
     aictl.patapsco.ai/remote-dev: "true"
