@@ -52,6 +52,11 @@ def main():
     s.add_argument("--steps", type=int, default=30000)
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
 
+    s = sub.add_parser("verify", help="eyeball a new camera/format: EAC layout, GPS, views")
+    s.add_argument("video", type=Path)
+    s.add_argument("--out", type=Path, default=Path("data/verify"))
+    s.add_argument("--at", type=float, default=5.0, help="seconds into the clip")
+
     s = sub.add_parser("merge", help="chunk splats -> one streamable world (tiles + world.json)")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--out", required=True, type=Path)
@@ -116,6 +121,10 @@ def main():
     elif args.cmd == "train":
         from .train import train_all
         train_all(args.chunks, steps=args.steps, extra=args.extra)
+
+    elif args.cmd == "verify":
+        from .verify import verify
+        verify(args.video, args.out, at_s=args.at)
 
     elif args.cmd == "merge":
         from .merge import merge
