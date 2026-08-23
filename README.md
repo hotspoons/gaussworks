@@ -128,6 +128,29 @@ Hardware mapping (see the fleet):
 The image is multi-arch-intended; GH200/Spark are arm64 — CUDA arch list is a
 build arg.
 
+## Portability: the cleavage points
+
+Built on our stack, designed to run on anyone's. Three contracts keep it that
+way — anything behind a contract is swappable without touching the rest:
+
+1. **Camera contract** — every source reduces to the ingest layout:
+   `images/camN/*.jpg` (pinhole views) + `frames.jsonl` (one record per
+   capture position) + optional `geo.txt` (`camN/file.jpg lat lon alt`,
+   WGS84). Supported today: GoPro `.360` (native EAC), **any stitched
+   equirectangular video** — which covers Insta360, Qoocam, and most no-name
+   360 cameras via their export apps (`--projection equirect`) — flat/pinhole
+   video, image folders, and Mapillary sequences. Adding native Insta360
+   `.insv` (dual fisheye) or any other format = one new source module writing
+   this layout; nothing downstream knows or cares.
+2. **Stage contract** — every stage is a plain CLI over files on disk. The
+   whole chain runs on a laptop. Sharding is opt-in via standard `RANK` /
+   `WORLD_SIZE` env vars (default 0/1), so bare metal, a Slurm array,
+   plain k8s Jobs, or our LWS/devpod setup all work unmodified.
+3. **Container contract** — `Dockerfile` takes `BASE_IMAGE` as a build arg:
+   swap our `ai-dev-pod` for any CUDA-enabled torch image. The `deploy/`
+   manifests are optional conveniences for our platform, not dependencies —
+   nothing in `splatpipe/` imports or assumes them.
+
 ## Data sources
 
 Licenses and required attributions for all of these live in [THIRD_PARTY.md](THIRD_PARTY.md).
