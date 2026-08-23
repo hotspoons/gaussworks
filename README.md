@@ -150,6 +150,12 @@ way — anything behind a contract is swappable without touching the rest:
    swap our `ai-dev-pod` for any CUDA-enabled torch image. The `deploy/`
    manifests are optional conveniences for our platform, not dependencies —
    nothing in `splatpipe/` imports or assumes them.
+4. **Resource floor** — a single GPU on a 32GB-RAM box is a supported target,
+   not a degraded one (empirically proven: that's our dev pod). Build
+   concurrency auto-sizes from live CPU/RAM down to 1 job (single CUDA
+   compile jobs peak ~9-12GB); the JIT/object caches live on persistent
+   storage and resume across OOM kills. Big iron makes it faster, never
+   required.
 
 ## Data sources
 
