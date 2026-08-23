@@ -14,6 +14,7 @@ GSPLAT_REF=${GSPLAT_REF:-main}
 CUDA_ARCHS=${CUDA_ARCHS:-80}            # A100; add 89;90;120 for other pools
 export TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-8.0}
 export PIP_CACHE_DIR=/workspace/.pip-cache
+export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions   # gsplat JITs CUDA ops at first import; keep the cache on the PVC
 
 # --- concurrency from live resources ------------------------------------------
 # Measured on gsplat: a single ptxas peaks ~9GB RES; plain C++ TUs ~2GB. Size

@@ -15,6 +15,7 @@ fi
 # shellcheck disable=SC1091
 source /workspace/venv/bin/activate
 export PIP_CACHE_DIR=/workspace/.pip-cache
+export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions   # gsplat JITs CUDA ops at first import; keep the cache on the PVC
 
 # fast path: prebuilt wheels cached on the PVC (see README dev-pod section)
 if ls /workspace/wheels/*.whl >/dev/null 2>&1; then
@@ -24,4 +25,5 @@ pip install -q -e /workspace/gaussworks
 
 echo 'export PATH=/workspace/opt/sfm/bin:$PATH' >> ~/.bashrc
 echo 'source /workspace/venv/bin/activate' >> ~/.bashrc
+echo 'export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions' >> ~/.bashrc
 echo "[pod-bootstrap] done — colmap: $(command -v colmap || echo MISSING), venv active"
