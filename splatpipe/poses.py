@@ -59,6 +59,12 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
               "--SpatialMatching.ignore_z", "1",
               "--SpatialMatching.max_num_neighbors", "32",
               "--SiftMatching.use_gpu", gpu])
+    elif matcher == "exhaustive":
+        # small chunks: all-pairs matching links the rig's cam folders, which
+        # sequential (name-ordered) matching never crosses
+        _run(["colmap", "exhaustive_matcher",
+              "--database_path", str(db),
+              "--SiftMatching.use_gpu", gpu])
     else:
         _run(["colmap", "sequential_matcher",
               "--database_path", str(db),

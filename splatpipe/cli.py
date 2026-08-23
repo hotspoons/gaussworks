@@ -39,7 +39,7 @@ def main():
 
     s = sub.add_parser("poses", help="per-chunk COLMAP/GLOMAP + ENU alignment")
     s.add_argument("--chunks", required=True, type=Path)
-    s.add_argument("--matcher", choices=["spatial", "sequential"])
+    s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
 
     s = sub.add_parser("train", help="per-chunk gsplat training, rank-sharded")
