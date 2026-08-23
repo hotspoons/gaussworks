@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage 3: per-chunk camera poses via COLMAP (+GLOMAP), geo-aligned to ENU.
 
-spatial matching uses the GPS priors we wrote into EXIF, which handles
+Spatial matching uses the GPS priors we wrote into EXIF, which handles
 multi-camera rigs and both-direction passes without sequential assumptions.
-Rank-sharded: under torchrun/devpod each rank solves chunks[RANK::WORLD_SIZE].
+Work is claimed from a shared queue (see queue.py), so any number of workers
+on any number of nodes can be pointed at the same chunk directory.
 """
 
 import os
@@ -11,16 +12,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .queue import WorkQueue
+
 
 def _run(cmd: list[str], cwd: Path | None = None):
     print("[poses] $", " ".join(cmd))
     subprocess.run(cmd, cwd=cwd, check=True)
-
-
-def rank_shard(items: list) -> list:
-    rank = int(os.environ.get("RANK", 0))
-    world = int(os.environ.get("WORLD_SIZE", 1))
-    return items[rank::world]
 
 
 def list_chunks(chunks_dir: Path) -> list[Path]:
@@ -95,14 +92,10 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
 
 
 def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True):
-    mine = rank_shard(list_chunks(chunks_dir))
-    print(f"[poses] rank {os.environ.get('RANK', 0)}: {len(mine)} chunk(s)")
-    failed = []
-    for chunk in mine:
-        try:
-            solve_chunk(chunk, matcher=matcher, align=align)
-        except (subprocess.CalledProcessError, RuntimeError) as e:
-            print(f"[poses] {chunk.name}: FAILED ({e})")
-            failed.append(chunk.name)
+    chunks = list_chunks(chunks_dir)
+    q = WorkQueue(chunks_dir, "poses")
+    print(f"[poses] worker {q.worker}: {len(chunks)} chunk(s) in the pool")
+    done, failed = q.run(chunks, lambda c: solve_chunk(c, matcher=matcher, align=align))
+    print(f"[poses] worker {q.worker}: solved {len(done)}, failed {len(failed)}")
     if failed:
         raise SystemExit(f"[poses] failed chunks: {failed}")

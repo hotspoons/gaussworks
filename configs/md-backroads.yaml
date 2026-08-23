@@ -37,9 +37,16 @@ ingest:
     - {yaw: 270,  pitch: -10, fov: 100, width: 1600, height: 1200}
 
 chunk:
-  chunk_m: 200
+  # locality grid: every pass through a cell feeds that cell's chunk
+  cell_m: 200
   overlap_m: 40
   min_frames: 20
+
+corridor:
+  radius_m: 25          # how far off the driven line still counts as observed
+  height_margin_m: 8
+  min_spacing_m: 5      # polyline decimation
+  gap_m: 30             # jump that splits one pass from the next
 
 poses:
   matcher: spatial          # GPS priors from EXIF; handles both-direction passes

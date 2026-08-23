@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Stage 4: per-chunk gaussian splat training, sharded across ranks.
+"""Stage 4: per-chunk gaussian splat training, fanned out over a work queue.
 
-Chunks are independent, so there are no collectives: each rank runs the gsplat
-reference trainer on chunks[RANK::WORLD_SIZE], pinned to LOCAL_RANK's GPU.
-Under `devpod launch` a 4-node x 4-GPU group trains 16 chunks concurrently;
-plain single-GPU invocation works identically (RANK=0, WORLD_SIZE=1).
+Chunks are independent, so there are no collectives: each worker claims a chunk
+from the shared queue and runs the gsplat reference trainer on it, pinned to
+LOCAL_RANK's GPU. Under `devpod launch` a 4-node x 4-GPU group trains 16 chunks
+at a time and rebalances automatically; a single GPU works identically.
 """
 
 import os
@@ -12,7 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .poses import list_chunks, rank_shard
+from .poses import list_chunks
+from .queue import WorkQueue
 
 
 def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
@@ -36,14 +37,9 @@ def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = No
     if not (examples / "simple_trainer.py").exists():
         raise SystemExit(f"gsplat examples not found at {examples} (set GSPLAT_EXAMPLES)")
     ready = [c for c in list_chunks(chunks_dir) if (c / "sparse" / "0").exists()]
-    mine = rank_shard(ready)
-    print(f"[train] rank {os.environ.get('RANK', 0)}: {len(mine)} of {len(ready)} chunk(s)")
-    failed = []
-    for chunk in mine:
-        try:
-            train_chunk(chunk, examples, steps, extra or [])
-        except subprocess.CalledProcessError as e:
-            print(f"[train] {chunk.name}: FAILED ({e})")
-            failed.append(chunk.name)
+    q = WorkQueue(chunks_dir, "train")
+    print(f"[train] worker {q.worker}: {len(ready)} posed chunk(s) in the pool")
+    done, failed = q.run(ready, lambda c: train_chunk(c, examples, steps, extra or []))
+    print(f"[train] worker {q.worker}: trained {len(done)}, failed {len(failed)}")
     if failed:
         raise SystemExit(f"[train] failed chunks: {failed}")

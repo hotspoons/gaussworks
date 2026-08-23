@@ -32,17 +32,22 @@ def main():
     s.add_argument("--max-images", type=int, default=2000)
     s.add_argument("--min-seq-len", type=int, default=50)
 
-    s = sub.add_parser("chunk", help="frames -> overlapping spatial chunks")
+    s = sub.add_parser("chunk", help="frames -> overlapping locality chunks")
     s.add_argument("--frames", required=True, type=Path)
-    s.add_argument("--chunk-m", type=float)
-    s.add_argument("--overlap-m", type=float)
+    s.add_argument("--cell-m", type=float, help="grid cell size, metres (0 = one chunk)")
+    s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
+    s.add_argument("--min-frames", type=int, help="cells with fewer own frames are dropped")
+
+    s = sub.add_parser("status", help="queue state across chunks (pending/running/done/failed)")
+    s.add_argument("--chunks", required=True, type=Path)
+    s.add_argument("--stage", default="all", choices=["all", "poses", "train"])
 
     s = sub.add_parser("poses", help="per-chunk COLMAP/GLOMAP + ENU alignment")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
 
-    s = sub.add_parser("train", help="per-chunk gsplat training, rank-sharded")
+    s = sub.add_parser("train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--steps", type=int, default=30000)
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
@@ -75,11 +80,24 @@ def main():
         from .chunks import make_chunks
         cfg = _cfg(args.config, "chunk")
         make_chunks(args.frames,
-                    chunk_m=args.chunk_m if args.chunk_m is not None
-                    else cfg.get("chunk_m", 200.0),
+                    cell_m=args.cell_m if args.cell_m is not None
+                    else cfg.get("cell_m", 200.0),
                     overlap_m=args.overlap_m if args.overlap_m is not None
                     else cfg.get("overlap_m", 40.0),
-                    min_frames=cfg.get("min_frames", 20))
+                    min_frames=args.min_frames if args.min_frames is not None
+                    else cfg.get("min_frames", 20),
+                    corridor_cfg=_cfg(args.config, "corridor"))
+
+    elif args.cmd == "status":
+        from .poses import list_chunks
+        from .queue import WorkQueue
+        chunks = list_chunks(args.chunks)
+        stages = ["poses", "train"] if args.stage == "all" else [args.stage]
+        for stage in stages:
+            st = WorkQueue(args.chunks, stage).status(chunks)
+            print(f"{stage:6s} done={len(st['done'])} running={len(st['running'])} "
+                  f"failed={len(st['failed'])} pending={len(st['pending'])}"
+                  + (f"  FAILED: {', '.join(st['failed'][:6])}" if st["failed"] else ""))
 
     elif args.cmd == "poses":
         from .poses import solve_all
@@ -102,7 +120,7 @@ def main():
         # indoor sample: GPS is jitter, so keep time-spaced frames and use
         # sequential matching with no geo alignment
         frames = ingest_videos([args.sample], args.out, extract_fps=0.25, spacing_m=0)
-        chunks = make_chunks(frames, chunk_m=0)
+        chunks = make_chunks(frames, cell_m=0)
         solve_all(chunks, matcher="sequential", align=False)
         print("[smoke] poses OK — run `splatpipe train --chunks "
               f"{chunks}` on a GPU box with gsplat to finish")

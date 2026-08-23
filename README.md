@@ -21,16 +21,23 @@ video (.mp4 equirect / .360 EAC*)        Mapillary sequences (equirect + GPS)
         equirect → K virtual pinhole views, EXIF GPS written into each jpg
         │
         ▼
-  [2] chunk        overlapping ~200m segments along the GPS track
-        │
+  [2] chunk        locality grid: ~200m cells + halo. Every pass through a
+        │            cell feeds that cell's chunk, so driving a road twice
+        │            strengthens one reconstruction instead of making two.
+        │            Also emits corridor.json (observed envelope) per chunk.
         ▼
   [3] poses        per chunk: COLMAP features → spatial matching (GPS priors)
         │            → mapper (GLOMAP if present) → model_aligner to ENU
         ▼
-  [4] train        per chunk: gsplat trainer, one GPU per chunk,
-        │            sharded across ranks under torchrun / devpod launch
+  [4] train        per chunk: gsplat trainer, one GPU per chunk
+        │
         ▼
-     chunks/chunk_NNN/splat/*.ply   (merge/LOD hierarchy: next milestone)
+     chunks/chunk_xN_yN/splat/*.ply   (merge/LOD hierarchy: next milestone)
+
+Stages 3 and 4 pull work from a claim-based queue on shared storage, so any
+number of workers on any number of nodes can be pointed at the same chunk
+directory: work self-balances, a dead worker's chunk is reclaimed, and a
+re-run is a no-op for anything already done.
 ```
 
 \* `.360` (GoPro EAC, two-track) ingest is native: `splatpipe/eac.py` remaps
@@ -104,17 +111,22 @@ just image-build && just image-push
 kubectl apply -f deploy/zipspace.yaml
 ```
 
-Everything under `/workspace` is the shared RWX PVC. Stages 1–3 are
-embarrassingly parallel shell work; stage 4 shards chunks across ranks, so on
-the leader:
+Everything under `/workspace` is the shared RWX PVC, which is what lets the
+queue coordinate workers. On the leader:
 
 ```bash
+devpod launch python -m splatpipe.cli poses --chunks /workspace/data/run1/chunks
 devpod launch python -m splatpipe.cli train --chunks /workspace/data/run1/chunks
+splatpipe status --chunks /workspace/data/run1/chunks     # audit any time
 ```
 
-Each rank claims `chunks[RANK::WORLD_SIZE]` and pins itself to `LOCAL_RANK`'s
-GPU — a 4-node × 4-GPU group trains 16 chunks at a time. `poses` can be run
-the same way (`devpod launch python -m splatpipe.cli poses ...` shards too).
+Every worker loops "claim an unclaimed chunk, do it, mark it done" until the
+pool is empty, pinned to `LOCAL_RANK`'s GPU — so a 4-node × 4-GPU group works
+16 chunks at a time and rebalances itself when one chunk runs long. Failures
+are retried (twice by default) and then recorded, so `status` tells you which
+chunks need attention instead of the run dying. Scale is set by the group
+size, not the code: a 22 km neighbourhood capture is ~140 chunks ≈ 4 h of
+training on 16 GPUs, or a long afternoon on one.
 
 Hardware mapping (see the fleet):
 

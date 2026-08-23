@@ -5,7 +5,7 @@ ingest:
   spacing_m: 0            # keep every frame; toy images are pre-selected
 
 chunk:
-  chunk_m: 0              # single chunk
+  cell_m: 0              # single chunk
 
 poses:
   matcher: sequential
