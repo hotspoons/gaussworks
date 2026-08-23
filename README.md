@@ -78,6 +78,23 @@ Then:
 .venv/bin/splatpipe train  --chunks data/run1/chunks
 ```
 
+## Remote dev pod (Zipspace, single GPU)
+
+`deploy/devpod.yaml` stands up a 1-GPU remote-dev pod (VS Code plugin
+connectable; `zip-friends` init provides the tunnel bins). The loop:
+
+```bash
+kubectl apply -f deploy/devpod.yaml
+kubectl exec -it -n default <pod> -c dev -- bash -l
+# first time on a fresh PVC:
+sudo chown 1000:1000 /workspace
+git clone https://github.com/hotspoons/gaussworks.git /workspace/gaussworks
+cd /workspace/gaussworks && pip install -e . && export PATH=$HOME/.local/bin:$PATH
+sudo apt-get install -y ffmpeg libimage-exiftool-perl   # ingest system deps
+# iterate: edit anywhere, push, then here:
+git pull --ff-only
+```
+
 ## On the cluster (Zipspace)
 
 Build/push the image, deploy `deploy/zipspace.yaml`, connect to the leader:
