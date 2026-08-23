@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from . import ply
+from .guardrail import world_corridor
 
 
 def _segments(corridor: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -116,9 +117,15 @@ def merge(chunks_dir: Path, out: Path, prune_corridor: bool = True,
         print(f"[merge] {entry['chunk']}: {len(data)} -> owned {owned} "
               f"-> kept {len(sel)}")
 
+    # one leash for the whole world: viewers clamp cameras to it, the game
+    # takes it as the drivable centreline (see guardrail.py)
+    corridor = world_corridor(chunks_dir)
+    (out / "corridor.json").write_text(json.dumps(corridor, indent=1))
+
     world = {"frame": "enu", "origin": index["origin"], "cell_m": index["cell_m"],
              "gaussians": kept_total, "source_gaussians": raw_total,
-             "corridor_pruned": prune_corridor, "tiles": tiles}
+             "corridor_pruned": prune_corridor, "corridor": "corridor.json",
+             "corridor_passes": len(corridor["passes"]), "tiles": tiles}
     (out / "world.json").write_text(json.dumps(world, indent=1))
 
     if single and tiles:

@@ -36,12 +36,12 @@ video (.mp4 equirect / .360 EAC*)        Mapillary sequences (equirect + GPS)
         │            it owns (halo donates observations, not geometry), floaters
         ▼            outside the capture corridor are pruned
      world/tiles/chunk_xN_yN.ply + world.json   (LOD hierarchy: next milestone)
+```
 
 Stages 3 and 4 pull work from a claim-based queue on shared storage, so any
 number of workers on any number of nodes can be pointed at the same chunk
 directory: work self-balances, a dead worker's chunk is reclaimed, and a
 re-run is a no-op for anything already done.
-```
 
 \* `.360` (GoPro EAC, two-track) ingest is native: `splatpipe/eac.py` remaps
 EAC -> pinhole in one resample (no equirect intermediate, no patched ffmpeg),
@@ -158,9 +158,10 @@ way — anything behind a contract is swappable without touching the rest:
    `.insv` (dual fisheye) or any other format = one new source module writing
    this layout; nothing downstream knows or cares.
 2. **Stage contract** — every stage is a plain CLI over files on disk. The
-   whole chain runs on a laptop. Sharding is opt-in via standard `RANK` /
-   `WORLD_SIZE` env vars (default 0/1), so bare metal, a Slurm array,
-   plain k8s Jobs, or our LWS/devpod setup all work unmodified.
+   whole chain runs on a laptop. Fan-out needs no scheduler integration: point
+   N workers at the same chunk directory and they coordinate through the queue,
+   so bare metal, a Slurm array, plain k8s Jobs, or our LWS/devpod setup all
+   work unmodified.
 3. **Container contract** — `Dockerfile` takes `BASE_IMAGE` as a build arg:
    swap our `ai-dev-pod` for any CUDA-enabled torch image. The `deploy/`
    manifests are optional conveniences for our platform, not dependencies —
