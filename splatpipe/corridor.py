@@ -14,7 +14,7 @@ Coordinates are local ENU metres against a stated lat/lon origin, so corridors
 from different chunks compose into one world.
 """
 
-from .geo import ll_to_xy
+from .geo import ll_to_enu
 
 
 def _runs(frames, origin, gap_m):
@@ -28,8 +28,9 @@ def _runs(frames, origin, gap_m):
     lat0, lon0 = origin
     out, cur, prev = [], [], None
     for f in frames:
-        x, y = ll_to_xy(f["lat"], f["lon"], lat0, lon0)
-        pt = (x, y, float(f.get("alt") or 0.0), f)
+        x, y, _z = ll_to_enu(f["lat"], f["lon"], float(f.get("alt") or 0.0),
+                             (lat0, lon0, 0.0))
+        pt = (x, y, _z, f)
         if prev is not None:
             far = ((x - prev[0]) ** 2 + (y - prev[1]) ** 2) ** 0.5 > gap_m
             other_video = f.get("video") != prev[3].get("video")

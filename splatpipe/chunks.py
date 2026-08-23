@@ -24,7 +24,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from . import corridor as corridor_mod
-from .geo import ll_to_xy
+from .geo import ll_to_enu
 
 
 def _load_frames(frames_dir: Path) -> list[dict]:
@@ -41,8 +41,12 @@ def _cells_for(v: float, cell_m: float, overlap_m: float) -> set[int]:
 def _write_chunk(frames_dir: Path, chunk_dir: Path, members: list[dict],
                  geo_src: dict, origin: tuple, meta: dict, corridor_cfg: dict):
     images = chunk_dir / "images"
-    geo_lines = []
+    geo_lines, enu_lines = [], []
     for frame in members:
+        enu = None
+        if frame.get("lat") is not None:
+            enu = ll_to_enu(frame["lat"], frame["lon"], float(frame.get("alt") or 0.0),
+                            (origin[0], origin[1], 0.0))
         for rel in frame["images"].values():
             dst = images / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -50,8 +54,16 @@ def _write_chunk(frames_dir: Path, chunk_dir: Path, members: list[dict],
                 os.symlink(os.path.relpath(frames_dir / "images" / rel, dst.parent), dst)
             if rel in geo_src:
                 geo_lines.append(f"{rel} {geo_src[rel]}")
+            if enu is not None:
+                enu_lines.append(f"{rel} {enu[0]:.4f} {enu[1]:.4f} {enu[2]:.4f}")
     if geo_lines:
         (chunk_dir / "geo.txt").write_text("\n".join(geo_lines) + "\n")
+    # Reference positions in the ONE project frame. COLMAP's own --alignment_type
+    # enu would centre each chunk on its own GPS centroid, leaving every chunk in
+    # a different frame; aligning to these instead means all chunks (and their
+    # gaussians) share a world, so merge is concatenation.
+    if enu_lines:
+        (chunk_dir / "geo_enu.txt").write_text("\n".join(enu_lines) + "\n")
     if members and members[0].get("lat") is not None:
         (chunk_dir / "corridor.json").write_text(json.dumps(
             corridor_mod.build(members, origin, **corridor_cfg), indent=1))
@@ -88,7 +100,8 @@ def make_chunks(frames_dir: Path, cell_m: float = 200.0, overlap_m: float = 40.0
         core = defaultdict(list)
         members = defaultdict(list)
         for f in frames:
-            x, y = ll_to_xy(f["lat"], f["lon"], *origin)
+            x, y, _ = ll_to_enu(f["lat"], f["lon"], float(f.get("alt") or 0.0),
+                                (origin[0], origin[1], 0.0))
             cx, cy = math.floor(x / cell_m), math.floor(y / cell_m)
             core[(cx, cy)].append(f)
             for ix in _cells_for(x, cell_m, overlap_m):

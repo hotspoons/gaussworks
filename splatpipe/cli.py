@@ -52,6 +52,13 @@ def main():
     s.add_argument("--steps", type=int, default=30000)
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
 
+    s = sub.add_parser("merge", help="chunk splats -> one streamable world (tiles + world.json)")
+    s.add_argument("--chunks", required=True, type=Path)
+    s.add_argument("--out", required=True, type=Path)
+    s.add_argument("--keep-floaters", action="store_true",
+                   help="skip corridor pruning (keeps gaussians no camera observed)")
+    s.add_argument("--single", action="store_true", help="also write one world.ply")
+
     s = sub.add_parser("smoke", help="end-to-end sanity check on the .360 sample")
     s.add_argument("--sample", type=Path, default=Path("data/samples/GS010513.360"))
     s.add_argument("--out", type=Path, default=Path("data/smoke"))
@@ -109,6 +116,11 @@ def main():
     elif args.cmd == "train":
         from .train import train_all
         train_all(args.chunks, steps=args.steps, extra=args.extra)
+
+    elif args.cmd == "merge":
+        from .merge import merge
+        merge(args.chunks, args.out, prune_corridor=not args.keep_floaters,
+              single=args.single)
 
     elif args.cmd == "smoke":
         from .chunks import make_chunks

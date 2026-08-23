@@ -3,7 +3,40 @@
 
 import math
 
-R_EARTH = 6378137.0
+R_EARTH = 6378137.0          # WGS84 semi-major axis
+_F = 1 / 298.257223563       # WGS84 flattening
+_E2 = _F * (2 - _F)          # first eccentricity squared
+
+
+def lla_to_ecef(lat: float, lon: float, alt: float = 0.0) -> tuple[float, float, float]:
+    """Geodetic -> Earth-Centred Earth-Fixed metres (WGS84)."""
+    la, lo = math.radians(lat), math.radians(lon)
+    sin_la, cos_la = math.sin(la), math.cos(la)
+    n = R_EARTH / math.sqrt(1 - _E2 * sin_la * sin_la)
+    return ((n + alt) * cos_la * math.cos(lo),
+            (n + alt) * cos_la * math.sin(lo),
+            (n * (1 - _E2) + alt) * sin_la)
+
+
+def ll_to_enu(lat: float, lon: float, alt: float,
+              origin: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Geodetic -> local ENU metres about one project origin (lat, lon, alt).
+
+    This is THE world frame: every chunk's poses (and therefore its gaussians)
+    are aligned to it, so merging chunks is concatenation rather than a pile of
+    per-chunk transforms. Exact for the whole capture area, unlike the
+    small-angle projection in ll_to_xy.
+    """
+    lat0, lon0, alt0 = origin
+    x, y, z = lla_to_ecef(lat, lon, alt)
+    x0, y0, z0 = lla_to_ecef(lat0, lon0, alt0)
+    dx, dy, dz = x - x0, y - y0, z - z0
+    la, lo = math.radians(lat0), math.radians(lon0)
+    sin_la, cos_la, sin_lo, cos_lo = (math.sin(la), math.cos(la),
+                                      math.sin(lo), math.cos(lo))
+    return (-sin_lo * dx + cos_lo * dy,
+            -sin_la * cos_lo * dx - sin_la * sin_lo * dy + cos_la * dz,
+            cos_la * cos_lo * dx + cos_la * sin_lo * dy + sin_la * dz)
 
 
 def ll_to_xy(lat: float, lon: float, lat0: float, lon0: float) -> tuple[float, float]:

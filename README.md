@@ -32,7 +32,10 @@ video (.mp4 equirect / .360 EAC*)        Mapillary sequences (equirect + GPS)
   [4] train        per chunk: gsplat trainer, one GPU per chunk
         │
         ▼
-     chunks/chunk_xN_yN/splat/*.ply   (merge/LOD hierarchy: next milestone)
+  [5] merge        chunks -> world: each cell contributes only the gaussians
+        │            it owns (halo donates observations, not geometry), floaters
+        ▼            outside the capture corridor are pruned
+     world/tiles/chunk_xN_yN.ply + world.json   (LOD hierarchy: next milestone)
 
 Stages 3 and 4 pull work from a claim-based queue on shared storage, so any
 number of workers on any number of nodes can be pointed at the same chunk
@@ -183,6 +186,8 @@ Licenses and required attributions for all of these live in [THIRD_PARTY.md](THI
 
 1. ✅ ingest / chunk / poses / train, torchrun-sharded
 2. ✅ `.360` EAC ingest (validated on real Max footage; re-verify on Max 2 8K)
-3. Transient masking (moving cars, capture-vehicle shadow) + sky masks
-4. H3DGS hierarchy merge + per-image appearance embeddings (exposure drift)
-5. Export path: compressed splats (spz/sog) + collision mesh from road centerline
+3. ✅ locality chunking + capture corridors + claim-based fan-out + merge
+4. Transient masking (moving cars, capture-vehicle shadow) + sky masks
+5. LOD hierarchy over the merged tiles + per-image appearance embeddings
+6. Export path: compressed splats (spz/sog) + collision mesh from the corridor
+7. Lidar cross-check (Maryland lidar shares the ENU frame) for drift + collision

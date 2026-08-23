@@ -79,13 +79,20 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     model = _largest_model(raw)
 
     final = sparse / "0"
-    if align and (chunk / "geo.txt").exists():
+    enu_ref, gps_ref = chunk / "geo_enu.txt", chunk / "geo.txt"
+    if align and (enu_ref.exists() or gps_ref.exists()):
         final.mkdir(exist_ok=True)
+        if enu_ref.exists():
+            # positions already in the project ENU frame -> every chunk lands in
+            # the same world, which is what makes merging a concatenation
+            ref_args = ["--ref_images_path", str(enu_ref), "--ref_is_gps", "0",
+                        "--alignment_type", "custom"]
+        else:
+            ref_args = ["--ref_images_path", str(gps_ref), "--ref_is_gps", "1",
+                        "--alignment_type", "enu"]
         _run(["colmap", "model_aligner",
               "--input_path", str(model), "--output_path", str(final),
-              "--ref_images_path", str(chunk / "geo.txt"),
-              "--ref_is_gps", "1", "--alignment_type", "enu",
-              "--alignment_max_error", "3"])
+              *ref_args, "--alignment_max_error", "3"])
     else:
         shutil.move(str(model), str(final))
     print(f"[poses] {chunk.name}: done -> {final}")
