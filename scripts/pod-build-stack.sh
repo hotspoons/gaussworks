@@ -20,6 +20,12 @@ export PIP_CACHE_DIR=/workspace/.pip-cache
 # each pool by RAM and cap at core count, instead of guessing. MemAvailable is
 # node-level when the container has no memory limit — which is exactly the
 # budget that matters, since the kernel OOM-killer acts node-wide.
+# refuse to stack builds: overlapping compile bursts are how nodes die
+if pgrep -c -f "cicc|ptxas|cudafe|nvcc" >/dev/null 2>&1; then
+    echo "[build-stack] REFUSING to start: a CUDA build is already running (pgrep cicc/ptxas/nvcc)." >&2
+    exit 1
+fi
+
 cores=$(nproc)
 avail_gb=$(( $(awk '/MemAvailable/{print $2}' /proc/meminfo) / 1048576 ))
 cap() { local v=$1 lo=$2 hi=$3; [ "$v" -lt "$lo" ] && v=$lo; [ "$v" -gt "$hi" ] && v=$hi; echo "$v"; }

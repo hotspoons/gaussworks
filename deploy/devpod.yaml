@@ -47,6 +47,12 @@ spec:
     resources:
       nodes: 1
       gpusPerNode: 1
+      # Hard memory ceiling: the GPU node has ~32GB; without a limit, a heavy
+      # compile burst starves the kubelet and takes the NODE down (learned the
+      # hard way, 2026-08-23). With a limit, the container OOMs cleanly and
+      # the deployment restarts it — recovery is scripts/pod-bootstrap.sh.
+      limits:
+        memory: 24Gi
     volumes:
       - name: zip-friends-bins
         emptyDir: {}
