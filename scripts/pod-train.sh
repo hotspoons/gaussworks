@@ -19,10 +19,16 @@ GSPLAT_EXAMPLES=${GSPLAT_EXAMPLES:-/opt/gsplat/examples}
 
 export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-/workspace/.torch_extensions}
 
-# arch of the GPU we actually have, e.g. "8.0" -> only sm_80 gets built
-if [ -z "${TORCH_CUDA_ARCH_LIST:-}" ]; then
+# Arch of the GPU we actually have, e.g. "8.0" -> only sm_80 gets built.
+# NOTE: the NVIDIA pytorch containers EXPORT TORCH_CUDA_ARCH_LIST with every
+# supported arch ("7.5 8.0 8.6 9.0 10.0 12.0+PTX"), so we must override it
+# rather than defer to it. Set GAUSSWORKS_ARCH to pin a list by hand (e.g.
+# building a fat cache for a mixed fleet).
+if [ -n "${GAUSSWORKS_ARCH:-}" ]; then
+    TORCH_CUDA_ARCH_LIST=$GAUSSWORKS_ARCH
+else
     TORCH_CUDA_ARCH_LIST=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
-    [ -n "$TORCH_CUDA_ARCH_LIST" ] || { echo "no GPU detected; set TORCH_CUDA_ARCH_LIST" >&2; exit 1; }
+    [ -n "$TORCH_CUDA_ARCH_LIST" ] || { echo "no GPU detected; set GAUSSWORKS_ARCH" >&2; exit 1; }
 fi
 export TORCH_CUDA_ARCH_LIST
 
