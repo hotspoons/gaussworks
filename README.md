@@ -90,7 +90,7 @@ kubectl exec -it -n default <pod> -c dev -- bash -l
 sudo chown 1000:1000 /workspace
 git clone https://github.com/hotspoons/gaussworks.git /workspace/gaussworks
 cd /workspace/gaussworks && pip install -e . && export PATH=$HOME/.local/bin:$PATH
-sudo apt-get install -y ffmpeg libimage-exiftool-perl   # ingest system deps
+bash scripts/pod-bootstrap.sh    # ephemeral bits; scripts/pod-build-stack.sh for full stack
 # iterate: edit anywhere, push, then here:
 git pull --ff-only
 ```

@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: Apache-2.0
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Recover a dev pod after a container restart. Everything durable lives on the
 # PVC (/workspace: venv, wheels, COLMAP at /workspace/opt/sfm, data, repos);
 # this reinstalls only the ephemeral container-fs bits and wires the PATH.
