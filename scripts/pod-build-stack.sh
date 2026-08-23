@@ -5,16 +5,27 @@
 # image build, for pods running the plain ai-dev-pod base. Idempotent-ish:
 # skips COLMAP if already installed. ~40-60 min first run.
 #
-# Memory: GPU node has ~31GB RAM and no container memory limit — parallel
-# nvcc WILL OOM-kill the pod above ~8 jobs. Keep MAX_JOBS modest.
+# Concurrency is auto-sized from live CPU/RAM (see below); override with
+# CXX_JOBS / MAX_JOBS env vars. History: 16 blind jobs OOM-killed the pod.
 set -euo pipefail
 
 COLMAP_VER=${COLMAP_VER:-3.11.1}
 GSPLAT_REF=${GSPLAT_REF:-main}
 CUDA_ARCHS=${CUDA_ARCHS:-80}            # A100; add 89;90;120 for other pools
-export MAX_JOBS=${MAX_JOBS:-4}
 export TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-8.0}
 export PIP_CACHE_DIR=/workspace/.pip-cache
+
+# --- concurrency from live resources ------------------------------------------
+# Measured on gsplat: a single ptxas peaks ~9GB RES; plain C++ TUs ~2GB. Size
+# each pool by RAM and cap at core count, instead of guessing. MemAvailable is
+# node-level when the container has no memory limit — which is exactly the
+# budget that matters, since the kernel OOM-killer acts node-wide.
+cores=$(nproc)
+avail_gb=$(( $(awk '/MemAvailable/{print $2}' /proc/meminfo) / 1048576 ))
+cap() { local v=$1 lo=$2 hi=$3; [ "$v" -lt "$lo" ] && v=$lo; [ "$v" -gt "$hi" ] && v=$hi; echo "$v"; }
+CXX_JOBS=${CXX_JOBS:-$(cap $(( avail_gb / 2 )) 1 "$cores")}
+export MAX_JOBS=${MAX_JOBS:-$(cap $(( avail_gb / 9 )) 1 "$cores")}   # CUDA ext builds
+echo "[build-stack] cores=$cores avail=${avail_gb}GB -> CXX_JOBS=$CXX_JOBS MAX_JOBS=$MAX_JOBS"
 
 # --- build deps (container-fs, cheap to redo after restarts) -----------------
 sudo apt-get update -qq
@@ -36,7 +47,7 @@ if [ ! -x /workspace/opt/sfm/bin/colmap ]; then
     cmake -S /workspace/src/colmap -B /workspace/src/colmap/build -GNinja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
         -DGUI_ENABLED=OFF -DCMAKE_INSTALL_PREFIX=/workspace/opt/sfm
-    cmake --build /workspace/src/colmap/build --target install
+    cmake --build /workspace/src/colmap/build --target install -j "$CXX_JOBS"
 fi
 
 # --- gsplat + reference trainer deps -----------------------------------------
