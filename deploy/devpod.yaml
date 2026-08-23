@@ -52,7 +52,7 @@ spec:
       # hard way, 2026-08-23). With a limit, the container OOMs cleanly and
       # the deployment restarts it — recovery is scripts/pod-bootstrap.sh.
       limits:
-        memory: 24Gi
+        memory: 27Gi
     volumes:
       - name: zip-friends-bins
         emptyDir: {}
