@@ -5,7 +5,7 @@
 # image build, for pods running the plain ai-dev-pod base. Idempotent-ish:
 # skips COLMAP if already installed. ~40-60 min first run.
 #
-# Concurrency is auto-sized from live CPU/RAM (see below); override with
+# Concurrency and CUDA arch come from scripts/gsplat-env.sh; override with
 # CXX_JOBS / MAX_JOBS env vars. History: 16 blind jobs OOM-killed the pod.
 set -euo pipefail
 
