@@ -1,0 +1,113 @@
+# Self-bootstrapping remote-dev Zipspace: same generic ai-dev-pod image, but it
+# prepares itself at deploy time and leaves work running in tmux, then idles for
+# a VS Code / tunnel connection like any dev pod.
+#
+# leaderCommand replaces `devpod idle`, so it MUST end with `exec devpod idle`
+# to keep the pod alive and preserve dev-pod semantics.
+#
+# What the bootstrap does (all idempotent, safe to redeploy):
+#   1. take ownership of a fresh PVC             (root-owned by default)
+#   2. install the ephemeral apt deps            (container fs, lost on restart)
+#   3. clone or fast-forward the repo            (needs the repo to be public,
+#                                                 or the PVC pre-seeded)
+#   4. run scripts/pod-bootstrap.sh              (venv + editable install)
+#   5. if the heavy stack is missing, build it in tmux `stack`
+#      else if a chunk is present, train it in tmux `train`
+#   6. exec devpod idle
+#
+# Attach afterwards with: tmux attach -t stack   (or -t train)
+apiVersion: richard-siomporas.patapsco.ai/v1alpha1
+kind: ZipspaceDeployment
+metadata:
+  name: gaussworks-auto
+  namespace: default
+  annotations:
+    aictl.patapsco.ai/remote-dev: "true"
+    aictl.patapsco.ai/runtime-mode: dev-gpu-cluster
+    app: remote-dev
+  labels:
+    aictl.patapsco.ai/remote-dev: "true"
+    aictl.patapsco.ai/runtime-mode: dev-gpu-cluster
+    app: remote-dev
+spec:
+  deploymentType: Pod
+  volumeType: pvc
+  dataPvcSpec:
+    accessModes: [ReadWriteOnce]
+    ephemeral: false
+    size: 500Gi
+    storageClassName: cephfs
+  runtimeConfig:
+    runtime: generic
+    containerName: dev
+    image: harbor.tools.basedweights.com/patapsco.ai/ai-dev-pod:0.12.0
+    workingDir: /workspace
+    path:
+      rootPath: /workspace
+    servingTopology: HeadOnly
+
+    envVars:
+      # keep every cache on the PVC so a container restart is cheap
+      - name: TORCH_EXTENSIONS_DIR
+        value: /workspace/.torch_extensions
+      - name: PIP_CACHE_DIR
+        value: /workspace/.pip-cache
+      - name: GAUSSWORKS_REPO
+        value: https://github.com/hotspoons/gaussworks.git
+      - name: GAUSSWORKS_CHUNK
+        value: /workspace/gaussworks/data/pod-run/chunks/chunk_000
+
+    leaderCommand:
+      - bash
+      - -lc
+      - |
+        set -x
+        sudo chown "$(id -u):$(id -g)" /workspace 2>/dev/null || true
+        sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl || true
+        if [ -d /workspace/gaussworks/.git ]; then
+          git -C /workspace/gaussworks pull --ff-only || true
+        else
+          git clone "$GAUSSWORKS_REPO" /workspace/gaussworks || true
+        fi
+        cd /workspace/gaussworks 2>/dev/null && bash scripts/pod-bootstrap.sh || true
+        if [ ! -x /workspace/opt/sfm/bin/colmap ]; then
+          tmux new-session -d -s stack "bash /workspace/gaussworks/scripts/pod-build-stack.sh 2>&1 | tee /workspace/stack.log"
+        elif [ -d "$GAUSSWORKS_CHUNK/images" ]; then
+          tmux new-session -d -s train "bash /workspace/gaussworks/scripts/pod-train.sh $GAUSSWORKS_CHUNK 15000 2>&1 | tee /workspace/train.log"
+        fi
+        exec /usr/local/bin/devpod idle
+
+    initContainers:
+      - name: zip-friends-init
+        image: harbor.tools.basedweights.com/patapsco.ai/zip-friends:0.1.0
+        env:
+          - name: BIN_DEST
+            value: /opt/bin
+        volumeMounts:
+          - mountPath: /opt/bin
+            name: zip-friends-bins
+
+    ports:
+      # gsplat/viser splat viewer: kubectl port-forward <pod> 8080:8080
+      # (nested object, not a bare int — the CRD wraps corev1.ContainerPort)
+      - name: viewer
+        containerPort:
+          containerPort: 8080
+          name: viewer
+
+    resources:
+      nodes: 1
+      gpusPerNode: 1
+      limits:
+        memory: 27Gi           # a lone cicc on the fused kernels hits ~20GB
+
+    volumes:
+      - name: zip-friends-bins
+        emptyDir: {}
+      - name: shm
+        emptyDir: {medium: Memory}
+    volumeMounts:
+      - mountPath: /opt/bin
+        name: zip-friends-bins
+      - mountPath: /dev/shm
+        name: shm
