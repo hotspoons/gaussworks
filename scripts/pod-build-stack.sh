@@ -65,10 +65,10 @@ pip install --no-build-isolation .
 # plain PyPI deps first; the git deps need torch at build time, so they go
 # one-by-one with --no-build-isolation (a failure there is non-fatal: they
 # back optional trainer features like bilateral grids)
-grep -vE "^git\+" examples/requirements.txt | pip install -r /dev/stdin
+grep -vE "git\+" examples/requirements.txt | pip install -r /dev/stdin
 while read -r dep; do
     pip install --no-build-isolation "$dep" || echo "[build-stack] optional dep failed: $dep"
-done < <(grep -E "^git\+" examples/requirements.txt)
+done < <(grep -E "git\+" examples/requirements.txt)
 
 # --- wheel cache: wiped-venv recovery in seconds, reuses the build tree ------
 mkdir -p /workspace/wheels
