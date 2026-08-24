@@ -73,6 +73,9 @@ def _write_chunk(frames_dir: Path, chunk_dir: Path, members: list[dict],
     if members and members[0].get("lat") is not None:
         (chunk_dir / "corridor.json").write_text(json.dumps(
             corridor_mod.build(members, origin, **corridor_cfg), indent=1))
+    cams = frames_dir / "cameras.json"
+    if cams.exists():
+        (chunk_dir / "cameras.json").write_text(cams.read_text())
     (chunk_dir / "meta.json").write_text(json.dumps(meta, indent=1))
 
 

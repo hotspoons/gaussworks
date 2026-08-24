@@ -7,6 +7,7 @@ Work is claimed from a shared queue (see queue.py), so any number of workers
 on any number of nodes can be pointed at the same chunk directory.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -49,6 +50,16 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
                "--ImageReader.camera_model", "PINHOLE",
                "--ImageReader.single_camera_per_folder", "1",
                "--SiftExtraction.use_gpu", gpu]
+    cams_path = chunk / "cameras.json"
+    if cams_path.exists():
+        cams = json.loads(cams_path.read_text())
+        # every synthesised view shares intrinsics, so one param string covers
+        # all folders; without this COLMAP guesses fx = 1.2*max(w,h)
+        c = cams[0]
+        extract += ["--ImageReader.camera_params",
+                    f"{c['fx']:.6f},{c['fy']:.6f},{c['cx']:.6f},{c['cy']:.6f}"]
+        print(f"[poses] intrinsics from cameras.json: fx={c['fx']:.1f} "
+              f"cx={c['cx']:.1f} ({c['width']}x{c['height']}, {c['fov']} deg)")
     if (chunk / "masks").is_dir():
         # keeps features off the capture vehicle, which is rigid in the camera
         # frame and would otherwise drag every pose toward itself

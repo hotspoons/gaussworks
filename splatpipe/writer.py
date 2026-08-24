@@ -12,6 +12,7 @@ position priors straight from the database.
 """
 
 import json
+import math
 from fractions import Fraction
 from pathlib import Path
 
@@ -19,7 +20,7 @@ import cv2
 import numpy as np
 import piexif
 
-from .reframe import Reframer
+from .reframe import DEFAULT_VIEWS, Reframer
 
 
 def _deg_to_dms_rational(deg: float):
@@ -51,10 +52,25 @@ class FrameWriter:
         # "equirect" reframes internally; "eac" gets pre-made views via
         # add_views (see ingest's .360 path); "flat" passes through.
         self.reframer = Reframer(views) if projection == "equirect" else None
-        from .reframe import DEFAULT_VIEWS
         n_cams = len(views or DEFAULT_VIEWS) if projection in ("equirect", "eac") else 1
         for k in range(n_cams):
             (self.out / "images" / f"cam{k}").mkdir(parents=True, exist_ok=True)
+        # We SYNTHESISE these pinhole views, so their intrinsics are known
+        # exactly. Recording them matters: left to guess, COLMAP assumes
+        # fx = 1.2*max(w,h), which for a 100 deg view is ~3x the truth and the
+        # incremental mapper cannot bootstrap from that (5/424 images
+        # registered, observed on real capture).
+        specs = views or DEFAULT_VIEWS
+        if projection in ("equirect", "eac"):
+            cams = []
+            for k, v in enumerate(specs):
+                f = 0.5 * v["width"] / math.tan(math.radians(v["fov"]) / 2)
+                cams.append({"cam": f"cam{k}", "model": "PINHOLE",
+                             "width": v["width"], "height": v["height"],
+                             "fx": f, "fy": f,
+                             "cx": v["width"] / 2, "cy": v["height"] / 2,
+                             "yaw": v["yaw"], "pitch": v["pitch"], "fov": v["fov"]})
+            (self.out / "cameras.json").write_text(json.dumps(cams, indent=1))
         self._frames = open(self.out / "frames.jsonl", "w")
         self._geo = open(self.out / "geo.txt", "w")
         self.seq = 0

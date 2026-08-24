@@ -7,8 +7,18 @@ set -euo pipefail
 
 sudo chown "$(id -u):$(id -g)" /workspace 2>/dev/null || true
 sudo apt-get update -qq
+# Everything here lives on the CONTAINER filesystem, so it vanishes on every
+# restart while /workspace survives -- including the shared libraries the
+# PVC-installed COLMAP was linked against. Reinstalling them is most of what
+# this script is for.
 sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl \
-    libx11-6 libgl1 libgomp1   # open3d runtime (mesh stage)
+    libx11-6 libgl1 libgomp1 \
+    libopengl0 libglew2.2 libfreeimage3 libmetis5 libceres4 \
+    libboost-program-options1.83.0 libboost-graph1.83.0 \
+    libgoogle-glog0v6 libgflags2.2 libflann1.9 libsuitesparse-dev \
+    || sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl \
+        libx11-6 libgl1 libgomp1 libopengl0 libglew2.2 libfreeimage3 \
+        libmetis5 libgoogle-glog0v6 libgflags2.2   # older/newer name drift
 
 if [ ! -d /workspace/venv ]; then
     python -m venv --system-site-packages /workspace/venv
