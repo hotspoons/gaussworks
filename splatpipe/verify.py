@@ -27,6 +27,27 @@ def _streams(video: Path) -> list[dict]:
     return json.loads(out)["streams"]
 
 
+def _budget(video: Path):
+    """Measured bitrate -> minutes of capture per card. Guessing this from spec
+    sheets is how people run out of card halfway down a road."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(video)], check=True, capture_output=True).stdout
+    try:
+        secs = float(out.decode().strip())
+    except ValueError:
+        return
+    if secs <= 0:
+        return
+    size = video.stat().st_size
+    mbps = size * 8 / secs / 1e6
+    gb_min = size / secs * 60 / 1e9
+    print(f"[verify] rate: {mbps:.0f} Mbps = {gb_min:.2f} GB/min")
+    for card in (64, 128, 512, 1024):
+        print(f"[verify]   {card:>4d} GB card -> {card / gb_min:.0f} min "
+              f"({card / gb_min * 25 / 60:.1f} miles at 25 mph)")
+
+
 def verify(video: Path, out: Path, at_s: float = 5.0) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     native_360 = video.suffix.lower() == ".360"
@@ -36,6 +57,8 @@ def verify(video: Path, out: Path, at_s: float = 5.0) -> Path:
         dims = f" {st.get('width')}x{st.get('height')}" if st.get("width") else ""
         print(f"[verify]   stream {st['index']}: {st['codec_type']} "
               f"{st.get('codec_name')}{dims}")
+
+    _budget(video)
 
     gps = extract_telemetry(video)
     if gps:
