@@ -32,11 +32,15 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
     print(f"[train] {chunk.name}: done -> {result}")
 
 
-def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = None):
+def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = None,
+              only: list[str] | None = None):
     examples = Path(os.environ.get("GSPLAT_EXAMPLES", "/opt/gsplat/examples"))
     if not (examples / "simple_trainer.py").exists():
         raise SystemExit(f"gsplat examples not found at {examples} (set GSPLAT_EXAMPLES)")
     ready = [c for c in list_chunks(chunks_dir) if (c / "sparse" / "0").exists()]
+    if only:
+        ready = [c for c in ready if any(o in c.name for o in only)]
+        print(f"[train] --only {only}: {len(ready)} chunk(s)")
     q = WorkQueue(chunks_dir, "train")
     print(f"[train] worker {q.worker}: {len(ready)} posed chunk(s) in the pool")
     done, failed = q.run(ready, lambda c: train_chunk(c, examples, steps, extra or []))

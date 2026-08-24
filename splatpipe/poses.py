@@ -98,8 +98,12 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     print(f"[poses] {chunk.name}: done -> {final}")
 
 
-def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True):
+def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
+              only: list[str] | None = None):
     chunks = list_chunks(chunks_dir)
+    if only:
+        chunks = [c for c in chunks if any(o in c.name for o in only)]
+        print(f"[poses] --only {only}: {len(chunks)} chunk(s)")
     q = WorkQueue(chunks_dir, "poses")
     print(f"[poses] worker {q.worker}: {len(chunks)} chunk(s) in the pool")
     done, failed = q.run(chunks, lambda c: solve_chunk(c, matcher=matcher, align=align))

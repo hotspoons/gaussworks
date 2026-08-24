@@ -46,10 +46,12 @@ def main():
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
+    s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
 
     s = sub.add_parser("train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--steps", type=int, default=30000)
+    s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
 
     s = sub.add_parser("verify", help="eyeball a new camera/format: EAC layout, GPS, views")
@@ -148,11 +150,12 @@ def main():
         cfg = _cfg(args.config, "poses")
         solve_all(args.chunks,
                   matcher=args.matcher or cfg.get("matcher", "spatial"),
-                  align=not args.no_align and cfg.get("align", True))
+                  align=not args.no_align and cfg.get("align", True),
+                  only=args.only)
 
     elif args.cmd == "train":
         from .train import train_all
-        train_all(args.chunks, steps=args.steps, extra=args.extra)
+        train_all(args.chunks, steps=args.steps, extra=args.extra, only=args.only)
 
     elif args.cmd == "verify":
         from .verify import verify
