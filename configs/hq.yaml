@@ -1,0 +1,48 @@
+# Higher-quality capture profile. Costs roughly 3x the images (and training
+# time) of the default; use it per-chunk when a stretch matters, or for the
+# whole run when you have the GPUs.
+#
+# The two levers that actually move quality on 360 driving capture:
+#
+# 1. ANGULAR RESOLUTION. Default 4 views x 100 deg at 1600 px is 16 px/degree,
+#    while 8K EAC faces hold ~21 px/deg -- we were throwing away a quarter of
+#    the detail the camera recorded. Six views x 80 deg at 1920 px is 24
+#    px/deg, so the virtual cameras stop being the bottleneck. The narrower
+#    FOV also means less extreme distortion at frame edges, which SIFT likes.
+#
+# 2. VIEW OVERLAP AND SAMPLE DENSITY. Six views at 60 deg spacing overlap by
+#    20 deg (four at 90 deg spacing overlapped by 10), and 1.25 m frame
+#    spacing gives every surface more observations. Both constrain geometry
+#    that a single camera height leaves ambiguous -- the road crown, and
+#    houses seen through a narrow sweep as you pass.
+#
+# What this CANNOT fix: everything still shares one optical centre, so there
+# is no vertical baseline. A second physical camera at a different height is
+# the real answer to road-surface ambiguity.
+ingest:
+  projection: equirect
+  extract_fps: 6
+  spacing_m: 1.25
+  jpeg_quality: 96
+  views:
+    - {yaw: 0,   pitch: -12, fov: 80, width: 1920, height: 1440}
+    - {yaw: 60,  pitch: -12, fov: 80, width: 1920, height: 1440}
+    - {yaw: 120, pitch: -12, fov: 80, width: 1920, height: 1440}
+    - {yaw: 180, pitch: -12, fov: 80, width: 1920, height: 1440}
+    - {yaw: 240, pitch: -12, fov: 80, width: 1920, height: 1440}
+    - {yaw: 300, pitch: -12, fov: 80, width: 1920, height: 1440}
+
+chunk:
+  cell_m: 150
+  overlap_m: 40
+  min_frames: 20
+
+corridor:
+  radius_m: 25
+  height_margin_m: 8
+  min_spacing_m: 5
+  gap_m: 30
+
+poses:
+  matcher: spatial
+  align: true

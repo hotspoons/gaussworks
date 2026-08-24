@@ -31,11 +31,23 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
         return
     env = dict(os.environ)
     env.setdefault("CUDA_VISIBLE_DEVICES", os.environ.get("LOCAL_RANK", "0"))
-    cmd = [sys.executable, str(examples / "simple_trainer.py"), "default",
+    # route through our wrapper when masks exist, so the rig is excluded from
+    # the loss instead of being fitted as phantom geometry
+    masked = (chunk / "masks").is_dir()
+    entry = ([str(Path(__file__).with_name("gsplat_masked.py")), str(examples)]
+             if masked else [str(examples / "simple_trainer.py")])
+    cmd = [sys.executable, *entry, "default",
            "--data-dir", str(chunk), "--data-factor", "1",
            "--result-dir", str(result), "--max-steps", str(steps),
            "--save-ply", "--disable-viewer",
            "--no-normalize-world-space",   # keep gaussians in the project ENU frame
+           # Anti-aliasing matters when the same surface is seen from 2 m and
+           # from 60 m in one chunk, which is every driving capture. The two
+           # regularisers suppress the needle-shaped gaussians that show up as
+           # thin streaks across the sky.
+           "--antialiased",
+           "--opacity-reg", "0.001",
+           "--scale-reg", "0.01",
            *extra]
     print("[train] $", " ".join(cmd))
     subprocess.run(cmd, check=True, env=env)
