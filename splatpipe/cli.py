@@ -64,6 +64,14 @@ def main():
                    help="skip corridor pruning (keeps gaussians no camera observed)")
     s.add_argument("--single", action="store_true", help="also write one world.ply")
 
+    s = sub.add_parser("export", help="world corridor -> road/centerline for a sim or GIS")
+    s.add_argument("--world", required=True, type=Path, help="merge output dir")
+    s.add_argument("--out", type=Path)
+    s.add_argument("--width-m", type=float, default=6.0, help="road ribbon width")
+    s.add_argument("--drop-m", type=float, default=2.4,
+                   help="camera height above the road surface")
+    s.add_argument("--z-up", action="store_true", help="keep ENU Z-up (default Y-up)")
+
     s = sub.add_parser("smoke", help="end-to-end sanity check on the .360 sample")
     s.add_argument("--sample", type=Path, default=Path("data/samples/GS010513.360"))
     s.add_argument("--out", type=Path, default=Path("data/smoke"))
@@ -130,6 +138,11 @@ def main():
         from .merge import merge
         merge(args.chunks, args.out, prune_corridor=not args.keep_floaters,
               single=args.single)
+
+    elif args.cmd == "export":
+        from .export import export
+        export(args.world, args.out, width_m=args.width_m, y_up=not args.z_up,
+               drop_m=args.drop_m)
 
     elif args.cmd == "smoke":
         from .chunks import make_chunks
