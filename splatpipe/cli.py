@@ -25,6 +25,7 @@ def main():
     s.add_argument("--projection", choices=["equirect", "flat"])
     s.add_argument("--extract-fps", type=float)
     s.add_argument("--spacing-m", type=float)
+    s.add_argument("--hwaccel", help="ffmpeg decoder, e.g. cuda (8K HEVC is decode-bound)")
 
     s = sub.add_parser("mapillary", help="fetch 360 sequences w/ GPS from Mapillary")
     s.add_argument("--bbox", required=True, help="w,s,e,n")
@@ -114,7 +115,8 @@ def main():
             extract_fps=args.extract_fps or cfg.get("extract_fps", 6.0),
             spacing_m=args.spacing_m if args.spacing_m is not None
             else cfg.get("spacing_m", 1.75),
-            jpeg_quality=cfg.get("jpeg_quality", 95))
+            jpeg_quality=cfg.get("jpeg_quality", 95),
+            hwaccel=args.hwaccel or cfg.get("hwaccel"))
 
     elif args.cmd == "mapillary":
         from .mapillary import fetch

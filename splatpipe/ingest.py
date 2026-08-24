@@ -82,10 +82,19 @@ def extract_telemetry(video: Path) -> list[dict]:
 
 
 def extract_candidates(video: Path, tmp: Path, extract_fps: float,
-                       stream: str | None = None) -> list[tuple[float, Path]]:
-    """Dump candidate frames; returns [(t_seconds, path)] in order."""
+                       stream: str | None = None,
+                       hwaccel: str | None = None) -> list[tuple[float, Path]]:
+    """Dump candidate frames; returns [(t_seconds, path)] in order.
+
+    8K HEVC is slow to decode on CPU and a .360 holds TWO such tracks, so a
+    long capture is decode-bound. `hwaccel="cuda"` moves decode to NVDEC and
+    lets the filter chain stay on the CPU, which is the cheap 5-10x.
+    """
     tmp.mkdir(parents=True, exist_ok=True)
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(video)]
+    cmd = ["ffmpeg", "-y", "-v", "error"]
+    if hwaccel:
+        cmd += ["-hwaccel", hwaccel]
+    cmd += ["-i", str(video)]
     if stream is not None:
         cmd += ["-map", stream]
     cmd += ["-vf", f"fps={extract_fps}", "-qscale:v", "2", str(tmp / "%06d.jpg")]
@@ -94,11 +103,14 @@ def extract_candidates(video: Path, tmp: Path, extract_fps: float,
     return [((i + 0.5) / extract_fps, p) for i, p in enumerate(paths)]
 
 
-def extract_candidates_360(video: Path, tmp: Path, extract_fps: float
+def extract_candidates_360(video: Path, tmp: Path, extract_fps: float,
+                           hwaccel: str | None = None
                            ) -> list[tuple[float, Path, Path]]:
     """GoPro .360: dump matching frame pairs from both EAC video tracks."""
-    t1 = extract_candidates(video, tmp / "t1", extract_fps, stream="0:v:0")
-    t2 = extract_candidates(video, tmp / "t2", extract_fps, stream="0:v:1")
+    t1 = extract_candidates(video, tmp / "t1", extract_fps, stream="0:v:0",
+                            hwaccel=hwaccel)
+    t2 = extract_candidates(video, tmp / "t2", extract_fps, stream="0:v:1",
+                            hwaccel=hwaccel)
     if len(t1) != len(t2):
         print(f"[ingest] warning: track frame counts differ ({len(t1)} vs {len(t2)})")
     return [(t, p1, p2) for (t, p1), (_, p2) in zip(t1, t2)]
@@ -116,7 +128,8 @@ def sharpness(path: Path) -> float:
 
 def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                   views: list[dict] | None = None, extract_fps: float = 6.0,
-                  spacing_m: float = 1.75, jpeg_quality: int = 95) -> Path:
+                  spacing_m: float = 1.75, jpeg_quality: int = 95,
+                  hwaccel: str | None = None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     is_360 = any(v.suffix.lower() == ".360" for v in videos)
     writer = FrameWriter(out, projection="eac" if is_360 else projection,
@@ -129,10 +142,12 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
             gps = extract_telemetry(video)
             with tempfile.TemporaryDirectory(dir=out, prefix=".candidates-") as td:
                 if native_360:
-                    pairs = extract_candidates_360(video, Path(td), extract_fps)
+                    pairs = extract_candidates_360(video, Path(td), extract_fps,
+                                                   hwaccel=hwaccel)
                     cands = [(t, p1) for t, p1, _ in pairs]
                 else:
-                    cands = extract_candidates(video, Path(td), extract_fps)
+                    cands = extract_candidates(video, Path(td), extract_fps,
+                                               hwaccel=hwaccel)
                 if gps:
                     gt = np.array([p["t"] for p in gps])
                     lat = np.interp([t for t, _ in cands], gt, [p["lat"] for p in gps])
