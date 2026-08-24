@@ -64,6 +64,14 @@ def main():
                    help="skip corridor pruning (keeps gaussians no camera observed)")
     s.add_argument("--single", action="store_true", help="also write one world.ply")
 
+    s = sub.add_parser("mesh", help="trained splat -> textured mesh (depth fusion)")
+    s.add_argument("--chunk", required=True, type=Path)
+    s.add_argument("--ckpt", type=Path)
+    s.add_argument("--out", type=Path)
+    s.add_argument("--voxel-m", type=float, default=0.05)
+    s.add_argument("--depth-max-m", type=float, default=60.0)
+    s.add_argument("--max-tris", type=int, default=0, help="0 = no decimation")
+
     s = sub.add_parser("export", help="world corridor -> road/centerline for a sim or GIS")
     s.add_argument("--world", required=True, type=Path, help="merge output dir")
     s.add_argument("--out", type=Path)
@@ -138,6 +146,11 @@ def main():
         from .merge import merge
         merge(args.chunks, args.out, prune_corridor=not args.keep_floaters,
               single=args.single)
+
+    elif args.cmd == "mesh":
+        from .mesh import build
+        build(args.chunk, args.ckpt, args.out, voxel_m=args.voxel_m,
+              depth_max_m=args.depth_max_m, max_tris=args.max_tris)
 
     elif args.cmd == "export":
         from .export import export
