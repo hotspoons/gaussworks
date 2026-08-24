@@ -54,7 +54,8 @@ def _load_splats(ckpt: Path, device):
 def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
           voxel_m: float = 0.05, trunc_m: float | None = None,
           depth_max_m: float = 30.0, max_tris: int = 0,
-          corridor_pad_m: float = 5.0, min_alpha: float = 0.6) -> Path:
+          corridor_pad_m: float = 5.0, min_alpha: float = 0.6,
+          image_factor: int = 2) -> Path:
     import open3d as o3d                          # noqa: PLC0415
     import torch                                  # noqa: PLC0415
     from gsplat import rasterization              # noqa: PLC0415
@@ -75,7 +76,7 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
     parser = _load_parser(chunk)
     n_cams = len(parser.camtoworlds)
     print(f"[mesh] {n_cams} cameras, {len(splats['means'])} gaussians, "
-          f"sh_degree={sh_degree}, voxel={voxel_m} m")
+          f"sh_degree={sh_degree}, voxel={voxel_m} m", flush=True)
 
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
         voxel_length=voxel_m,
@@ -86,7 +87,15 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
         c2w = torch.tensor(parser.camtoworlds[i], dtype=torch.float32, device=device)
         K = torch.tensor(parser.Ks_dict[parser.camera_ids[i]],
                          dtype=torch.float32, device=device)
-        photo = np.asarray(Image.open(parser.image_paths[i]).convert("RGB"))
+        img = Image.open(parser.image_paths[i]).convert("RGB")
+        if image_factor > 1:
+            # Open3D fuses on the CPU one pixel at a time, so full-res frames
+            # dominate runtime while adding no detail a 5-10 cm voxel can hold.
+            img = img.resize((img.width // image_factor, img.height // image_factor),
+                             Image.BILINEAR)
+            K = K.clone()
+            K[:2] /= image_factor
+        photo = np.asarray(img)
         h, w = photo.shape[:2]
 
         with torch.no_grad():
@@ -116,12 +125,13 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
             w, h, float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2]))
         volume.integrate(rgbd, intr, np.linalg.inv(parser.camtoworlds[i]))
         if (i + 1) % 50 == 0:
-            print(f"[mesh]   fused {i + 1}/{n_cams} (last frame {covered:.0%} covered)")
+            print(f"[mesh]   fused {i + 1}/{n_cams} "
+                  f"(last frame {covered:.0%} covered)", flush=True)
 
     mesh = volume.extract_triangle_mesh()
     mesh.compute_vertex_normals()
     print(f"[mesh] fused surface: {len(mesh.vertices)} verts, "
-          f"{len(mesh.triangles)} tris")
+          f"{len(mesh.triangles)} tris", flush=True)
 
     corridor_path = chunk / "corridor.json"
     if corridor_path.exists():
