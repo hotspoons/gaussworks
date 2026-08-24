@@ -1,6 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage 4: per-chunk gaussian splat training, fanned out over a work queue.
 
+IMPORTANT: we train with --no-normalize-world-space. gsplat's trainer defaults
+to recentring and rescaling the scene into a unit-ish box, which silently
+undoes the shared ENU frame that poses.py went to trouble to establish: chunk
+gaussians would land in a different per-chunk frame, so merge could not simply
+concatenate, corridor pruning would match nothing, and drive/mesh would render
+an empty world (observed: a splat spanning +-2 units against a corridor
+spanning hundreds of metres).
+
 Chunks are independent, so there are no collectives: each worker claims a chunk
 from the shared queue and runs the gsplat reference trainer on it, pinned to
 LOCAL_RANK's GPU. Under `devpod launch` a 4-node x 4-GPU group trains 16 chunks
@@ -26,7 +34,9 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
     cmd = [sys.executable, str(examples / "simple_trainer.py"), "default",
            "--data-dir", str(chunk), "--data-factor", "1",
            "--result-dir", str(result), "--max-steps", str(steps),
-           "--save-ply", "--disable-viewer", *extra]
+           "--save-ply", "--disable-viewer",
+           "--no-normalize-world-space",   # keep gaussians in the project ENU frame
+           *extra]
     print("[train] $", " ".join(cmd))
     subprocess.run(cmd, check=True, env=env)
     print(f"[train] {chunk.name}: done -> {result}")
