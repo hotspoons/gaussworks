@@ -92,6 +92,19 @@ def main():
                    help="drop depth pixels whose gradient exceeds this fraction "
                         "of depth (silhouette bleed); 0 disables")
 
+    s = sub.add_parser("drive", help="render a drive along the capture corridor")
+    s.add_argument("--chunk", required=True, type=Path)
+    s.add_argument("--out", type=Path)
+    s.add_argument("--ckpt", type=Path)
+    s.add_argument("--corridor", type=Path, help="defaults to the chunk's corridor.json")
+    s.add_argument("--width", type=int, default=1280)
+    s.add_argument("--height", type=int, default=720)
+    s.add_argument("--fov", type=float, default=90.0)
+    s.add_argument("--spacing-m", type=float, default=0.35, help="metres per frame")
+    s.add_argument("--fps", type=int, default=30)
+    s.add_argument("--height-offset-m", type=float, default=0.0,
+                   help="raise/lower from the original lens height")
+
     s = sub.add_parser("route", help="corridor -> one driveable point-to-point stage")
     s.add_argument("--world", required=True, type=Path)
     s.add_argument("--out", type=Path)
@@ -190,6 +203,13 @@ def main():
               depth_max_m=args.depth_max_m, max_tris=args.max_tris,
               min_alpha=args.min_alpha, image_factor=args.image_factor,
               edge_rel=args.edge_rel)
+
+    elif args.cmd == "drive":
+        from .drive import render
+        render(args.chunk, args.out, ckpt=args.ckpt, corridor=args.corridor,
+               width=args.width, height=args.height, fov_deg=args.fov,
+               spacing_m=args.spacing_m, fps=args.fps,
+               height_offset_m=args.height_offset_m)
 
     elif args.cmd == "route":
         from .route import build_from_world
