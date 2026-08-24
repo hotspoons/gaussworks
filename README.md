@@ -189,6 +189,9 @@ Licenses and required attributions for all of these live in [THIRD_PARTY.md](THI
 2. ✅ `.360` EAC ingest (validated on real Max footage; re-verify on Max 2 8K)
 3. ✅ locality chunking + capture corridors + claim-based fan-out + merge
 4. Transient masking (moving cars, capture-vehicle shadow) + sky masks
-5. LOD hierarchy over the merged tiles + per-image appearance embeddings
-6. Export path: compressed splats (spz/sog) + collision mesh from the corridor
-7. Lidar cross-check (Maryland lidar shares the ENU frame) for drift + collision
+5. Mesh export: implemented (`splatpipe mesh`) but **unvalidated** — needs
+   driving capture with real baseline; classic MVS is the fallback
+6. LOD hierarchy over the merged tiles + per-image appearance embeddings
+7. Export path: compressed splats (spz/sog); `splatpipe route`/`export` already
+   emit stage centreline + road ribbon for point-to-point sim tracks
+8. Lidar cross-check (Maryland lidar shares the ENU frame) for drift + collision

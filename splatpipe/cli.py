@@ -75,6 +75,9 @@ def main():
                    help="skip pixels the splat barely covers")
     s.add_argument("--image-factor", type=int, default=2,
                    help="downscale frames before CPU fusion (1 = full res)")
+    s.add_argument("--edge-rel", type=float, default=0.05,
+                   help="drop depth pixels whose gradient exceeds this fraction "
+                        "of depth (silhouette bleed); 0 disables")
 
     s = sub.add_parser("route", help="corridor -> one driveable point-to-point stage")
     s.add_argument("--world", required=True, type=Path)
@@ -164,7 +167,8 @@ def main():
         from .mesh import build
         build(args.chunk, args.ckpt, args.out, voxel_m=args.voxel_m,
               depth_max_m=args.depth_max_m, max_tris=args.max_tris,
-              min_alpha=args.min_alpha, image_factor=args.image_factor)
+              min_alpha=args.min_alpha, image_factor=args.image_factor,
+              edge_rel=args.edge_rel)
 
     elif args.cmd == "route":
         from .route import build_from_world

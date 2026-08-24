@@ -17,6 +17,18 @@ actually wants for texture streaming.
 
 Voxel size is the quality dial. 5 cm resolves road texture and kerbs; 10 cm is
 plenty for scenery and a quarter of the memory.
+
+STATUS: the plumbing runs end to end (fuse -> filter -> crop -> decimate ->
+OBJ/PLY) but has NOT produced a usable mesh yet. Validated only against a
+12-second handheld clip, where every view is from nearly the same spot: TSDF
+needs a surface seen from several distinct viewpoints for wrong depth to
+cancel, and with no baseline the rendered depth is simply believed, so the
+result is a radial spray rather than surfaces. Expect this to behave very
+differently on driving capture, where a stretch of road is observed from 50+
+positions across a 100 m approach. If it still disappoints there, classic MVS
+(COLMAP dense / RealityCapture) on the same poses triangulates from real image
+correspondences instead of trusting rendered depth, and is the better route to
+a game mesh.
 """
 
 import json
@@ -55,7 +67,8 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
           voxel_m: float = 0.05, trunc_m: float | None = None,
           depth_max_m: float = 30.0, max_tris: int = 0,
           corridor_pad_m: float = 5.0, min_alpha: float = 0.6,
-          image_factor: int = 2) -> Path:
+          image_factor: int = 2, edge_rel: float = 0.05) -> Path:
+    import cv2                                    # noqa: PLC0415
     import open3d as o3d                          # noqa: PLC0415
     import torch                                  # noqa: PLC0415
     from gsplat import rasterization              # noqa: PLC0415
@@ -65,10 +78,15 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
     out = Path(out or chunk / "mesh")
     out.mkdir(parents=True, exist_ok=True)
     if ckpt is None:
-        ckpts = sorted((chunk / "splat" / "ckpts").glob("ckpt_*.pt"))
+        ckpts = list((chunk / "splat" / "ckpts").glob("ckpt_*.pt"))
         if not ckpts:
             raise SystemExit(f"no checkpoint under {chunk}/splat/ckpts")
-        ckpt = ckpts[-1]
+        # highest STEP, not lexicographic order: sorted() puts ckpt_14999
+        # before ckpt_6999 and would silently pick the earlier model
+        def step(p):
+            digits = "".join(c for c in p.stem if c.isdigit())
+            return int(digits) if digits else -1
+        ckpt = max(ckpts, key=step)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     splats = _load_splats(Path(ckpt), device)
@@ -114,6 +132,19 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
         depth = torch.where((alpha >= min_alpha) & (depth <= depth_max_m),
                             depth, torch.zeros_like(depth))
         depth = depth.clamp(0, depth_max_m).cpu().numpy().astype(np.float32)
+
+        # Silhouette bleed is THE artifact of fusing rendered depth: across an
+        # object edge the expected depth interpolates between the near surface
+        # and the far background, and fusing those in-between values extrudes
+        # long spikes along the camera ray (a starburst, seen from above).
+        # Drop steep-gradient pixels, then erode so the rim goes too.
+        if edge_rel > 0:
+            gy, gx = np.gradient(depth)
+            steep = np.hypot(gx, gy) > edge_rel * np.maximum(depth, 1e-3)
+            depth[steep] = 0.0
+            keep_px = cv2.erode((depth > 0).astype(np.uint8),
+                                np.ones((5, 5), np.uint8))
+            depth[keep_px == 0] = 0.0
         covered = float((depth > 0).mean())
 
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
