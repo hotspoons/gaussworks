@@ -69,8 +69,18 @@ def main():
     s.add_argument("--ckpt", type=Path)
     s.add_argument("--out", type=Path)
     s.add_argument("--voxel-m", type=float, default=0.05)
-    s.add_argument("--depth-max-m", type=float, default=60.0)
+    s.add_argument("--depth-max-m", type=float, default=30.0)
     s.add_argument("--max-tris", type=int, default=0, help="0 = no decimation")
+    s.add_argument("--min-alpha", type=float, default=0.6,
+                   help="skip pixels the splat barely covers")
+
+    s = sub.add_parser("route", help="corridor -> one driveable point-to-point stage")
+    s.add_argument("--world", required=True, type=Path)
+    s.add_argument("--out", type=Path)
+    s.add_argument("--join-m", type=float, default=60.0,
+                   help="max endpoint gap that still counts as connected")
+    s.add_argument("--dedupe-m", type=float, default=20.0,
+                   help="how close counts as retracing the same road")
 
     s = sub.add_parser("export", help="world corridor -> road/centerline for a sim or GIS")
     s.add_argument("--world", required=True, type=Path, help="merge output dir")
@@ -79,6 +89,7 @@ def main():
     s.add_argument("--drop-m", type=float, default=2.4,
                    help="camera height above the road surface")
     s.add_argument("--z-up", action="store_true", help="keep ENU Z-up (default Y-up)")
+    s.add_argument("--route", type=Path, help="route.json: export one stage, not every pass")
 
     s = sub.add_parser("smoke", help="end-to-end sanity check on the .360 sample")
     s.add_argument("--sample", type=Path, default=Path("data/samples/GS010513.360"))
@@ -150,12 +161,18 @@ def main():
     elif args.cmd == "mesh":
         from .mesh import build
         build(args.chunk, args.ckpt, args.out, voxel_m=args.voxel_m,
-              depth_max_m=args.depth_max_m, max_tris=args.max_tris)
+              depth_max_m=args.depth_max_m, max_tris=args.max_tris,
+              min_alpha=args.min_alpha)
+
+    elif args.cmd == "route":
+        from .route import build_from_world
+        build_from_world(args.world, args.out, join_m=args.join_m,
+                         dedupe_tol_m=args.dedupe_m)
 
     elif args.cmd == "export":
         from .export import export
         export(args.world, args.out, width_m=args.width_m, y_up=not args.z_up,
-               drop_m=args.drop_m)
+               drop_m=args.drop_m, route=args.route)
 
     elif args.cmd == "smoke":
         from .chunks import make_chunks

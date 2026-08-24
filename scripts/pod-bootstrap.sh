@@ -7,7 +7,8 @@ set -euo pipefail
 
 sudo chown "$(id -u):$(id -g)" /workspace 2>/dev/null || true
 sudo apt-get update -qq
-sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl
+sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl \
+    libx11-6 libgl1 libgomp1   # open3d runtime (mesh stage)
 
 if [ ! -d /workspace/venv ]; then
     python -m venv --system-site-packages /workspace/venv

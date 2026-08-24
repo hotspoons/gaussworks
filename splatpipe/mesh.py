@@ -53,8 +53,8 @@ def _load_splats(ckpt: Path, device):
 
 def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
           voxel_m: float = 0.05, trunc_m: float | None = None,
-          depth_max_m: float = 60.0, max_tris: int = 0,
-          corridor_pad_m: float = 5.0) -> Path:
+          depth_max_m: float = 30.0, max_tris: int = 0,
+          corridor_pad_m: float = 5.0, min_alpha: float = 0.6) -> Path:
     import open3d as o3d                          # noqa: PLC0415
     import torch                                  # noqa: PLC0415
     from gsplat import rasterization              # noqa: PLC0415
@@ -90,13 +90,22 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
         h, w = photo.shape[:2]
 
         with torch.no_grad():
-            render, _, _ = rasterization(
+            render, alphas, _ = rasterization(
                 splats["means"], splats["quats"], splats["scales"],
                 splats["opacities"], splats["sh"],
                 torch.linalg.inv(c2w)[None], K[None], w, h,
                 sh_degree=sh_degree, render_mode="RGB+ED",
                 near_plane=0.1, far_plane=depth_max_m)
-        depth = render[0, ..., 3].clamp(0, depth_max_m).cpu().numpy().astype(np.float32)
+        # Only integrate pixels the splat actually covers. gsplat's expected
+        # depth is a weighted mean, so in sky or empty space it returns a
+        # plausible-looking number with no surface behind it -- integrating
+        # those inflates the TSDF across the whole far field (and OOMs).
+        alpha = alphas[0, ..., 0]
+        depth = render[0, ..., 3]
+        depth = torch.where((alpha >= min_alpha) & (depth <= depth_max_m),
+                            depth, torch.zeros_like(depth))
+        depth = depth.clamp(0, depth_max_m).cpu().numpy().astype(np.float32)
+        covered = float((depth > 0).mean())
 
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             o3d.geometry.Image(np.ascontiguousarray(photo)),
@@ -107,7 +116,7 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
             w, h, float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2]))
         volume.integrate(rgbd, intr, np.linalg.inv(parser.camtoworlds[i]))
         if (i + 1) % 50 == 0:
-            print(f"[mesh]   fused {i + 1}/{n_cams}")
+            print(f"[mesh]   fused {i + 1}/{n_cams} (last frame {covered:.0%} covered)")
 
     mesh = volume.extract_triangle_mesh()
     mesh.compute_vertex_normals()

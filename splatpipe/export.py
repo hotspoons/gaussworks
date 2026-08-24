@@ -64,7 +64,7 @@ def _ribbon(points, width_m: float):
 
 
 def export(world_dir: Path, out: Path | None = None, width_m: float = 6.0,
-           y_up: bool = True, drop_m: float = 2.4) -> Path:
+           y_up: bool = True, drop_m: float = 2.4, route: Path | None = None) -> Path:
     """Write road/centerline geometry from a merged world's corridor.
 
     `drop_m` lowers the ribbon from camera height to the road surface: the
@@ -74,7 +74,11 @@ def export(world_dir: Path, out: Path | None = None, width_m: float = 6.0,
     world_dir = Path(world_dir)
     out = Path(out or world_dir / "export")
     out.mkdir(parents=True, exist_ok=True)
-    corridor = json.loads((world_dir / "corridor.json").read_text())
+    if route is not None:
+        from .route import as_corridor                  # noqa: PLC0415
+        corridor = as_corridor(json.loads(Path(route).read_text()))
+    else:
+        corridor = json.loads((world_dir / "corridor.json").read_text())
     origin = (corridor["origin"]["lat"], corridor["origin"]["lon"], 0.0)
 
     road_v, road_f, line_v, line_e = [], [], [], []
