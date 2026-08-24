@@ -44,11 +44,16 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     sparse.mkdir(exist_ok=True)
 
     gpu = "1" if use_gpu else "0"
-    _run(["colmap", "feature_extractor",
-          "--database_path", str(db), "--image_path", str(chunk / "images"),
-          "--ImageReader.camera_model", "PINHOLE",
-          "--ImageReader.single_camera_per_folder", "1",
-          "--SiftExtraction.use_gpu", gpu])
+    extract = ["colmap", "feature_extractor",
+               "--database_path", str(db), "--image_path", str(chunk / "images"),
+               "--ImageReader.camera_model", "PINHOLE",
+               "--ImageReader.single_camera_per_folder", "1",
+               "--SiftExtraction.use_gpu", gpu]
+    if (chunk / "masks").is_dir():
+        # keeps features off the capture vehicle, which is rigid in the camera
+        # frame and would otherwise drag every pose toward itself
+        extract += ["--ImageReader.mask_path", str(chunk / "masks")]
+    _run(extract)
 
     if matcher == "spatial" and (chunk / "geo.txt").exists():
         _run(["colmap", "spatial_matcher",

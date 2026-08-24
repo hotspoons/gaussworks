@@ -52,6 +52,12 @@ def _write_chunk(frames_dir: Path, chunk_dir: Path, members: list[dict],
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not dst.exists():
                 os.symlink(os.path.relpath(frames_dir / "images" / rel, dst.parent), dst)
+            src_mask = frames_dir / "masks" / (rel + ".png")
+            if src_mask.exists():
+                mdst = chunk_dir / "masks" / (rel + ".png")
+                mdst.parent.mkdir(parents=True, exist_ok=True)
+                if not mdst.exists():
+                    os.symlink(os.path.relpath(src_mask.resolve(), mdst.parent), mdst)
             if rel in geo_src:
                 geo_lines.append(f"{rel} {geo_src[rel]}")
             if enu is not None:

@@ -26,6 +26,8 @@ def main():
     s.add_argument("--extract-fps", type=float)
     s.add_argument("--spacing-m", type=float)
     s.add_argument("--hwaccel", help="ffmpeg decoder, e.g. cuda (8K HEVC is decode-bound)")
+    s.add_argument("--start-s", type=float, default=0.0, help="skip into the clip")
+    s.add_argument("--duration-s", type=float, help="ingest only this many seconds")
 
     s = sub.add_parser("mapillary", help="fetch 360 sequences w/ GPS from Mapillary")
     s.add_argument("--bbox", required=True, help="w,s,e,n")
@@ -38,6 +40,14 @@ def main():
     s.add_argument("--cell-m", type=float, help="grid cell size, metres (0 = one chunk)")
     s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
     s.add_argument("--min-frames", type=int, help="cells with fewer own frames are dropped")
+
+    s = sub.add_parser("mask", help="auto-mask the capture vehicle out of every frame")
+    s.add_argument("--frames", required=True, type=Path)
+    s.add_argument("--sample", type=int, default=60)
+    s.add_argument("--search-from", type=float, default=0.35,
+                   help="fraction down the frame where the rig may start")
+    s.add_argument("--dark-pct", type=float, default=45.0,
+                   help="percentile of median luminance treated as rig")
 
     s = sub.add_parser("status", help="queue state across chunks (pending/running/done/failed)")
     s.add_argument("--chunks", required=True, type=Path)
@@ -116,7 +126,8 @@ def main():
             spacing_m=args.spacing_m if args.spacing_m is not None
             else cfg.get("spacing_m", 1.75),
             jpeg_quality=cfg.get("jpeg_quality", 95),
-            hwaccel=args.hwaccel or cfg.get("hwaccel"))
+            hwaccel=args.hwaccel or cfg.get("hwaccel"),
+            start_s=args.start_s, duration_s=args.duration_s)
 
     elif args.cmd == "mapillary":
         from .mapillary import fetch
@@ -135,6 +146,11 @@ def main():
                     min_frames=args.min_frames if args.min_frames is not None
                     else cfg.get("min_frames", 20),
                     corridor_cfg=_cfg(args.config, "corridor"))
+
+    elif args.cmd == "mask":
+        from .mask import build
+        build(args.frames, sample=args.sample, search_from=args.search_from,
+              dark_pct=args.dark_pct)
 
     elif args.cmd == "status":
         from .poses import list_chunks

@@ -83,7 +83,8 @@ def extract_telemetry(video: Path) -> list[dict]:
 
 def extract_candidates(video: Path, tmp: Path, extract_fps: float,
                        stream: str | None = None,
-                       hwaccel: str | None = None) -> list[tuple[float, Path]]:
+                       hwaccel: str | None = None, start_s: float = 0.0,
+                       duration_s: float | None = None) -> list[tuple[float, Path]]:
     """Dump candidate frames; returns [(t_seconds, path)] in order.
 
     8K HEVC is slow to decode on CPU and a .360 holds TWO such tracks, so a
@@ -94,23 +95,28 @@ def extract_candidates(video: Path, tmp: Path, extract_fps: float,
     cmd = ["ffmpeg", "-y", "-v", "error"]
     if hwaccel:
         cmd += ["-hwaccel", hwaccel]
+    if start_s:
+        cmd += ["-ss", str(start_s)]          # before -i: seeks, does not decode
     cmd += ["-i", str(video)]
+    if duration_s:
+        cmd += ["-t", str(duration_s)]
     if stream is not None:
         cmd += ["-map", stream]
     cmd += ["-vf", f"fps={extract_fps}", "-qscale:v", "2", str(tmp / "%06d.jpg")]
     subprocess.run(cmd, check=True)
     paths = sorted(tmp.glob("*.jpg"))
-    return [((i + 0.5) / extract_fps, p) for i, p in enumerate(paths)]
+    # timestamps stay on the source clock so GPS interpolation still lines up
+    return [(start_s + (i + 0.5) / extract_fps, p) for i, p in enumerate(paths)]
 
 
 def extract_candidates_360(video: Path, tmp: Path, extract_fps: float,
-                           hwaccel: str | None = None
+                           hwaccel: str | None = None, start_s: float = 0.0,
+                           duration_s: float | None = None
                            ) -> list[tuple[float, Path, Path]]:
     """GoPro .360: dump matching frame pairs from both EAC video tracks."""
-    t1 = extract_candidates(video, tmp / "t1", extract_fps, stream="0:v:0",
-                            hwaccel=hwaccel)
-    t2 = extract_candidates(video, tmp / "t2", extract_fps, stream="0:v:1",
-                            hwaccel=hwaccel)
+    kw = dict(hwaccel=hwaccel, start_s=start_s, duration_s=duration_s)
+    t1 = extract_candidates(video, tmp / "t1", extract_fps, stream="0:v:0", **kw)
+    t2 = extract_candidates(video, tmp / "t2", extract_fps, stream="0:v:1", **kw)
     if len(t1) != len(t2):
         print(f"[ingest] warning: track frame counts differ ({len(t1)} vs {len(t2)})")
     return [(t, p1, p2) for (t, p1), (_, p2) in zip(t1, t2)]
@@ -129,7 +135,8 @@ def sharpness(path: Path) -> float:
 def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                   views: list[dict] | None = None, extract_fps: float = 6.0,
                   spacing_m: float = 1.75, jpeg_quality: int = 95,
-                  hwaccel: str | None = None) -> Path:
+                  hwaccel: str | None = None, start_s: float = 0.0,
+                  duration_s: float | None = None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     is_360 = any(v.suffix.lower() == ".360" for v in videos)
     writer = FrameWriter(out, projection="eac" if is_360 else projection,
@@ -143,11 +150,13 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
             with tempfile.TemporaryDirectory(dir=out, prefix=".candidates-") as td:
                 if native_360:
                     pairs = extract_candidates_360(video, Path(td), extract_fps,
-                                                   hwaccel=hwaccel)
+                                                   hwaccel=hwaccel, start_s=start_s,
+                                                   duration_s=duration_s)
                     cands = [(t, p1) for t, p1, _ in pairs]
                 else:
                     cands = extract_candidates(video, Path(td), extract_fps,
-                                               hwaccel=hwaccel)
+                                               hwaccel=hwaccel, start_s=start_s,
+                                               duration_s=duration_s)
                 if gps:
                     gt = np.array([p["t"] for p in gps])
                     lat = np.interp([t for t, _ in cands], gt, [p["lat"] for p in gps])
