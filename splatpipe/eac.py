@@ -21,9 +21,16 @@ them. Faces use the equi-angular mapping (q = atan(p) * 4/pi per axis).
 
 Math ported from trek-view/max2sphere (Paul Bourke); we build cv2.remap grids
 from arbitrary ray directions straight to track pixels, so 360 -> pinhole is a
-single resample (no equirect intermediate). In blend strips we snap to the
-nearer half instead of alpha-blending: worst case a sub-pixel seam on 64 of
-1376 columns, irrelevant for reconstruction.
+single resample (no equirect intermediate).
+
+THE BLEND STRIP IS A LENS BOUNDARY, not a formality. A .360 is the raw
+dual-lens capture: FRONT comes from one lens, BACK from the other, and every
+side face is stored as two halves -- one per lens -- meeting in a duplicated
+overlap strip. The two lenses differ in exposure and see the world from ~3 cm
+apart, so choosing one half or the other leaves a hard vertical seam with a
+colour step and a parallax jump, clearly visible on nearby objects and baked
+straight into the reconstruction. We therefore sample BOTH halves across the
+strip and feather between them, which is what the camera's own software does.
 
 Known templates (track WxH): 4096x1344 (5.6K) and 2272x736 (3K). Other sizes
 (e.g. Max 2 8K) are derived from the same proportions and worth eyeballing
@@ -80,7 +87,12 @@ FACE_SLOT = {LEFT: (0, 0), FRONT: (0, 1), RIGHT: (0, 2),
 
 
 def eac_maps(dirs: np.ndarray, tpl: Template):
-    """Directions (...,3) -> (track_index, map_x, map_y) in track pixels."""
+    """Directions (...,3) -> (track, map_x, map_y, map_x2, blend_weight).
+
+    `map_x2`/`blend_weight` describe the second lens' contribution inside the
+    overlap strip: the sampled colour is (1-w)*at(map_x) + w*at(map_x2). Weight
+    is zero everywhere else, so a caller can ignore it for centre faces.
+    """
     x, y, z = dirs[..., 0], dirs[..., 1], dirs[..., 2]
     ax, ay, az = np.abs(x), np.abs(y), np.abs(z)
     face = np.where(ay >= np.maximum(ax, az), np.where(y >= 0, FRONT, BACK),
@@ -90,6 +102,8 @@ def eac_maps(dirs: np.ndarray, tpl: Template):
     k = 4.0 / np.pi
     track = np.zeros(face.shape, np.uint8)
     ix = np.empty(face.shape, np.float64)
+    ix2 = np.empty(face.shape, np.float64)
+    weight = np.zeros(face.shape, np.float64)
     iy = np.empty(face.shape, np.float64)
     duv = tpl.blend / tpl.side
 
@@ -108,16 +122,27 @@ def eac_maps(dirs: np.ndarray, tpl: Template):
         iy[m] = v * tpl.height
         if section == 1:
             ix[m] = tpl.side + u * tpl.height
+            ix2[m] = ix[m]
         else:
-            # side sections store the face as two halves around a duplicated
-            # blend strip; snap to the nearer half (sub-pixel seam at worst)
-            u_half = np.where(u < 0.5,
-                              2 * (0.5 - duv) * u,
-                              2 * (0.5 - duv) * (u - 0.5) + 0.5 + duv)
+            # Each side face is two half-images, one per lens, overlapping in a
+            # `blend`-wide strip. Map u onto both halves; inside the strip the
+            # two are cross-faded, outside it one of them is used outright.
             x0 = 0 if section == 0 else tpl.side + tpl.height
-            ix[m] = x0 + u_half * tpl.side
+            u_left = 2 * (0.5 - duv) * u
+            u_right = 2 * (0.5 - duv) * (u - 0.5) + 0.5 + duv
+            lo, hi = 0.5 - 2 * duv, 0.5 + 2 * duv
+            in_left = u_left <= lo
+            in_right = u_right >= hi
+            w = np.clip((u_left - lo) / max(2 * duv, 1e-9), 0.0, 1.0)
+            w = np.where(in_left, 0.0, np.where(in_right, 1.0, w))
+            primary = np.where(in_right, u_right, u_left)
+            secondary = np.where(in_right, u_right, u_right)
+            ix[m] = x0 + primary * tpl.side
+            ix2[m] = x0 + secondary * tpl.side
+            weight[m] = np.where(in_left | in_right, 0.0, w)
 
-    return track, ix.astype(np.float32), iy.astype(np.float32)
+    return (track, ix.astype(np.float32), iy.astype(np.float32),
+            ix2.astype(np.float32), weight.astype(np.float32))
 
 
 class EacSampler:
@@ -133,10 +158,17 @@ class EacSampler:
         return self._cache[key]
 
     def sample(self, key, dirs, track1: np.ndarray, track2: np.ndarray) -> np.ndarray:
-        track, mx, my = self._maps(key, dirs)
-        a = cv2.remap(track1, mx, my, cv2.INTER_LINEAR)
-        b = cv2.remap(track2, mx, my, cv2.INTER_LINEAR)
-        return np.where(track[..., None] == 0, a, b)
+        track, mx, my, mx2, w = self._maps(key, dirs)
+        pick = lambda x: np.where(track[..., None] == 0,
+                                  cv2.remap(track1, x, my, cv2.INTER_LINEAR),
+                                  cv2.remap(track2, x, my, cv2.INTER_LINEAR))
+        primary = pick(mx).astype(np.float32)
+        if not w.any():
+            return primary.astype(np.uint8)
+        # feather across the lens overlap instead of stepping between lenses
+        secondary = pick(mx2).astype(np.float32)
+        a = w[..., None]
+        return ((1.0 - a) * primary + a * secondary).clip(0, 255).astype(np.uint8)
 
 
 def view_dirs(width: int, height: int, fov_deg: float, yaw_deg: float, pitch_deg: float) -> np.ndarray:
