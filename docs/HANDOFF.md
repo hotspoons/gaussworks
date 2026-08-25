@@ -87,9 +87,12 @@ which glomap && glomap -h | head -3        # expect "compiled with CUDA!"
 colmap -h | sed -n 2p                      # expect "... with CUDA)"
 
 # 4. Camera profiles load.
-splatpipe profiles                         # expect 7 profiles
+splatpipe profiles                         # expect 7: gopro-max, gopro-max2,
+                                           # gopro-360-generic, equirect-360,
+                                           # insta360-x3, insta360-x4, pinhole
 
 # 5. gsplat imports and its CUDA extension is cached, not rebuilt.
+#    RUN THIS ONLY WHEN THE POD IS OTHERWISE IDLE -- see trap 6.
 python -c "import gsplat; print(gsplat.__version__)"
 
 # 6. End-to-end on real footage — the single most useful check.
@@ -159,19 +162,20 @@ visible pixels only:
 PSNR when masks differ — gsplat zeroes masked pixels in the render but not the
 ground truth, worth ~4.5 dB here.
 
-**In flight at handoff** (2026-08-25 16:29 UTC). `/workspace/data/street2`, the
+**In flight at handoff** (2026-08-25 16:40 UTC). `/workspace/data/street2`, the
 first full run through the per-lens pipeline: 916 frames × 6 views = 5,496
-images, 4 chunks, both drive directions present in every cell. Poses:
-1 chunk running, 3 pending; **3,868 of 3,870 images registered (99.95%)** on
-the running chunk, in its final global bundle adjustment. **Training has not
-started, so there is no quality number for the per-lens change yet.** That is
-the first thing to finish.
+images, 4 chunks, both drive directions present in every cell.
 
-Note the mapper asymmetry if you resume it: chunk 1 ran on COLMAP's incremental
-mapper (GLOMAP was not yet installed), chunks 2–4 will use GLOMAP. Chunks are
-independent and `splatpipe eval` compares checkpoints within a chunk, so this
-does not contaminate the comparison — but it does make cross-chunk timings
-meaningless.
+The COLMAP incremental mapper reached **3,868 of 3,870 images registered
+(99.95%)** on `chunk_x0_y-1` — proof that the spatial-matching fix in trap 3
+works — and then the container restarted (trap 6) before it wrote its model,
+losing that mapping. Its `colmap.db` survived with 63,400 verified pairs, so
+`poses` was relaunched and will reuse it. All four chunks now map with GLOMAP.
+
+**Training has not started, so there is no quality number for the per-lens
+change yet.** That is the first thing to finish: `splatpipe status --chunks
+/workspace/data/street2/chunks`, then `splatpipe eval` against 23.07 dB, then
+`splatpipe drive` for a flythrough.
 
 **Open.** Whether per-lens planning beats 23.07 dB. Road crown needs a second,
 lower physical camera — no software fix exists, every lens is at one roof
@@ -213,7 +217,22 @@ that will bite a fresh pod:
    hit four times. Same trap for `pgrep -f -c` as a liveness probe: it counts
    the probe. Use exact-name matching (`pkill -x colmap`, `pgrep -c -x colmap`)
    or signal a PID; for completion, have the job `touch` a marker file.
-5. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
+5. **Do not run a torch import while a heavy job is going.** The container has
+   a hard 27 Gi limit (deliberately — see trap 1). COLMAP's mapper sits at
+   ~7.8 GB, and `import gsplat` pulls in torch and initialises CUDA for
+   several more. Doing both at once **restarts the container**: `kubectl exec`
+   returns exit 137, the pod's `restartCount` increments, and every running job
+   dies. This happened while verifying gate 5 against a mapper at 99.95%
+   registration, and cost five hours of mapping. Check `pgrep -x colmap` and
+   `free -g` first, or run verification on an idle pod. What made the recovery
+   cheap rather than catastrophic was database reuse (`poses.py` keeps a
+   complete `colmap.db`), so only the mapping was lost, not the 73 min of GPU
+   feature work.
+6. **A container restart takes `~/.git-credentials` with it** — the default
+   `credential.helper store` writes to the container filesystem. Point it at
+   the PVC, as in §2.1, or the first `git pull` after a restart fails with
+   "could not read Username".
+7. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a
    correctly-applied fix look like it had never run. `flush=True` everywhere.
