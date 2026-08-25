@@ -80,7 +80,9 @@ export EXIFTOOL=/workspace/opt/exiftool/exiftool
 # 1. ExifTool understands GoPro GPS9. MUST be > 0.
 exiftool -listx | grep -c GPS9
 
-# 2. GLOMAP present. If this is empty, poses runs ~4x slower and says so.
+# 2. GLOMAP present AND able to finish. `glomap -h` is NOT sufficient --
+#    see trap 8: it can complete an entire reconstruction and abort writing it.
+#    The only honest gate is a real mapping on the smallest chunk you have.
 which glomap && glomap -h | head -3        # expect "compiled with CUDA!"
 
 # 3. COLMAP has CUDA.
@@ -177,6 +179,23 @@ change yet.** That is the first thing to finish: `splatpipe status --chunks
 /workspace/data/street2/chunks`, then `splatpipe eval` against 23.07 dB, then
 `splatpipe drive` for a flythrough.
 
+**Next, and worth doing properly: declare the rig.** The GLOMAP failure above
+points at something real. Our six virtual cameras are not six independent
+cameras — they are one rigid rig whose relative orientations we know
+*exactly*, because we synthesised them from the view plan (yaw/pitch per
+camera, one shared optical centre per lens, and a known ~3 cm offset between
+the two lenses). COLMAP 3.12+ models this natively via `rigs` / `rig_sensors`
+with a `sensor_from_rig` transform per camera. Populating it would:
+
+- satisfy the check GLOMAP aborts on, and
+- collapse 6 poses per capture position into **1 pose plus 6 fixed offsets**,
+  which is a large reduction in free parameters and removes the whole class of
+  "the six views drifted relative to each other" error.
+
+`splatpipe/writer.py` already records each camera's `yaw`, `pitch` and `lens`
+in `cameras.json`, so the transforms are a short computation away. This needs
+COLMAP 3.12+ across the toolchain.
+
 **Open.** Whether per-lens planning beats 23.07 dB. Road crown needs a second,
 lower physical camera — no software fix exists, every lens is at one roof
 height. Mesh stage is implemented but unvalidated on driving data. The shipped
@@ -232,7 +251,28 @@ that will bite a fresh pod:
    `credential.helper store` writes to the container filesystem. Point it at
    the PVC, as in §2.1, or the first `git pull` after a restart fails with
    "could not read Username".
-7. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
+7. **GLOMAP 1.2.0 aborts writing the model when the database came from COLMAP
+   3.11.** GLOMAP 1.2.0 vendors a COLMAP from Oct 2025 that models a
+   multi-camera setup as a *rig*. Opening a 3.11.1 database migrates in empty
+   `rigs` / `rig_sensors` / `frames` tables, and GLOMAP then dies at the very
+   last step — after a complete, successful reconstruction (1,129,132 tracks,
+   global positioning, BA, track filtering all fine):
+
+   ```
+   Check failed: existing_rig.RefSensorId() == rig.RefSensorId()
+   terminate called after throwing an instance of 'std::invalid_argument'
+   ```
+
+   All four street chunks, ~2 h of global SfM each, discarded at the write.
+   Keep the COLMAP generation consistent across the toolchain, or use GLOMAP
+   1.0.0 (predates the rig model). `--mapper auto|glomap|colmap` now makes the
+   choice explicit rather than "whatever is on PATH". COLMAP 3.11.1 maps a
+   migrated database without complaint, so the fallback is safe.
+8. **After a container restart, build dependencies are gone too.**
+   `pod-bootstrap.sh` restores the *runtime* libraries COLMAP links against,
+   not the `-dev` packages. The next `cmake` fails on a missing Eigen3 or
+   Ceres config. Re-run the apt block from `pod-build-stack.sh` first.
+9. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a
    correctly-applied fix look like it had never run. `flush=True` everywhere.
