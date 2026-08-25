@@ -167,7 +167,7 @@ def main():
 
     elif args.cmd == "status":
         from .poses import list_chunks
-        from .queue import WorkQueue
+        from .workqueue import WorkQueue
         chunks = list_chunks(args.chunks)
         stages = ["poses", "train"] if args.stage == "all" else [args.stage]
         for stage in stages:

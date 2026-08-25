@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A claim-based work queue on shared storage.
 
+(Named workqueue, not queue: a module called queue.py inside the package
+shadows the stdlib `queue` for any script run from this directory, and
+torch imports `from queue import Queue` deep in its stack.)
+
 Static sharding (`chunks[RANK::WORLD_SIZE]`) is fine until a chunk is slow or a
 worker dies: then one rank holds the whole run's tail while the others idle, and
 anything the dead rank owned is simply never done. Instead every worker loops

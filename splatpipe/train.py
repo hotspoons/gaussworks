@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from .poses import list_chunks
-from .queue import WorkQueue
+from .workqueue import WorkQueue
 
 
 def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
@@ -34,7 +34,7 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
     # route through our wrapper when masks exist, so the rig is excluded from
     # the loss instead of being fitted as phantom geometry
     masked = (chunk / "masks").is_dir()
-    entry = ([str(Path(__file__).with_name("gsplat_masked.py")), str(examples)]
+    entry = (["-m", "splatpipe.gsplat_masked", str(examples)]
              if masked else [str(examples / "simple_trainer.py")])
     cmd = [sys.executable, *entry, "default",
            "--data-dir", str(chunk), "--data-factor", "1",

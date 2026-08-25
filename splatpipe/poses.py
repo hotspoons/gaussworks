@@ -13,7 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .queue import WorkQueue
+from .workqueue import WorkQueue
 
 
 def _run(cmd: list[str], cwd: Path | None = None):
