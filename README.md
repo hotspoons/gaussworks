@@ -13,12 +13,15 @@ detail layer.
 ## Pipeline
 
 ```
-video (.mp4 equirect / .360 EAC*)        Mapillary sequences (equirect + GPS)
-        │                                         │
-        ▼                                         ▼
+any camera with a profile (.360, .insv,        Mapillary sequences (equirect + GPS)
+ equirect .mp4, plain pinhole)                            │
+        │                                                 ▼
+        ▼
   [1] ingest ──────────────────────────► frames.jsonl + images/camN/*.jpg + geo.txt
-        GPMF GPS via exiftool, distance-spaced frame pick (sharpest per window),
-        equirect → K virtual pinhole views, EXIF GPS written into each jpg
+        profile picks a driver, driver maps rays → pixels, view plan picks the
+        rays. GPS via exiftool, distance-spaced frame pick (sharpest per
+        window), EXIF GPS written into each jpg. Every view is rendered
+        THROUGH ONE LENS — see "The lens seam" below.
         │
         ▼
   [2] chunk        locality grid: ~200m cells + halo. Every pass through a
@@ -43,10 +46,61 @@ number of workers on any number of nodes can be pointed at the same chunk
 directory: work self-balances, a dead worker's chunk is reclaimed, and a
 re-run is a no-op for anything already done.
 
+## Cameras
+
+Nothing hardware-specific lives in the pipeline. A **profile** is a YAML file
+naming a **driver** (a projection), the lens axes, the telemetry source, and
+sensible defaults:
+
+```
+$ splatpipe profiles
+equirect-360           equirect       validated  telemetry=exif   lenses: sphere@+0
+gopro-360-generic      gopro_eac      derived    telemetry=gpmf   lenses: front@+0, rear@+180
+gopro-max              gopro_eac      validated  telemetry=gpmf   lenses: front@+0, rear@+180
+gopro-max2             gopro_eac      validated  telemetry=gpmf   lenses: front@+0, rear@+180
+insta360-x3            dual_fisheye   untested   telemetry=exif   lenses: front@+0, rear@+180
+insta360-x4            dual_fisheye   untested   telemetry=exif   lenses: front@+0, rear@+180
+pinhole                flat           validated  telemetry=exif   lenses: main@+0
+```
+
+Detection is automatic from the file (`splatpipe profiles clip.360 --plan`);
+`--profile NAME` pins it. **Adding a camera whose projection we already speak
+is a YAML file and no code.** Adding a new projection is one `Driver` subclass
+with three methods. `SPLATPIPE_PROFILES=/path` loads yours without forking.
+
+`status:` is not decoration — `untested` means the geometry came from a spec
+sheet, and `splatpipe verify` exists to fix that against real footage.
+
+### The lens seam
+
+A two-lens 360 camera is **two cameras a few centimetres apart**, and the
+directions where their coverage meets exist twice, from two different places.
+Every consumer stitcher hides that by warping the overlap until the parallax
+cancels. That is right for viewing and wrong for us: parallax is disparity,
+disparity is depth, and a warped image is no longer a central projection —
+which is the one thing structure-from-motion assumes it has.
+
+So gaussworks does not stitch. It **plans the virtual cameras inside each
+lens' cone**, and no training image ever contains a join:
+
+```
+[eac] 5952x1920: side=2016 face=1920 blend=96px -> each lens sees 94.74 deg from its axis
+[viewplan] 6 view(s) / frame
+   front: 3 x 80 deg 1920x1440 (24.0 px/deg)  yaw -50.0, 0, 50.0
+    rear: 3 x 80 deg 1920x1440 (24.0 px/deg)  yaw 130.0, 180, 230.0
+  covers 99.2% of the horizon (+-10 deg band), 34.2% of the full sphere
+```
+
+Same six images per frame the old fixed yaw ring produced, none of them
+stitched — and where the lenses do overlap the pipeline now gets two views
+with a real baseline instead of one image with a contradiction. Full
+reasoning, prior art, and what GoPro's D.WARP actually does:
+[docs/SEAM.md](docs/SEAM.md).
+
 \* `.360` (GoPro EAC, two-track) ingest is native: `splatpipe/eac.py` remaps
 EAC -> pinhole in one resample (no equirect intermediate, no patched ffmpeg),
-validated on a real GoPro Max file (`just fetch-360`). Max 2 8K files may use
-a new track size — eyeball `eac_to_equirect()` output before trusting it.
+validated on real Max and Max 2 footage. **Requires exiftool 12.90+** — the
+Max 2 writes GPS9 telemetry, and older builds silently report no GPS at all.
 
 ## Layout
 
@@ -82,7 +136,8 @@ just fetch-yt "https://www.youtube.com/watch?v=..." data/yt-run
 Then:
 
 ```bash
-.venv/bin/splatpipe ingest data/yt-run/video.mp4 --out data/run1 --projection equirect
+.venv/bin/splatpipe verify data/yt-run/video.mp4     # check the profile first
+.venv/bin/splatpipe ingest data/yt-run/video.mp4 --out data/run1
 .venv/bin/splatpipe chunk  --frames data/run1
 .venv/bin/splatpipe poses  --chunks data/run1/chunks
 .venv/bin/splatpipe train  --chunks data/run1/chunks
@@ -148,15 +203,16 @@ build arg.
 Built on our stack, designed to run on anyone's. Three contracts keep it that
 way — anything behind a contract is swappable without touching the rest:
 
-1. **Camera contract** — every source reduces to the ingest layout:
-   `images/camN/*.jpg` (pinhole views) + `frames.jsonl` (one record per
-   capture position) + optional `geo.txt` (`camN/file.jpg lat lon alt`,
-   WGS84). Supported today: GoPro `.360` (native EAC), **any stitched
-   equirectangular video** — which covers Insta360, Qoocam, and most no-name
-   360 cameras via their export apps (`--projection equirect`) — flat/pinhole
-   video, image folders, and Mapillary sequences. Adding native Insta360
-   `.insv` (dual fisheye) or any other format = one new source module writing
-   this layout; nothing downstream knows or cares.
+1. **Camera contract** — two layers, so overfitting to one camera's quirks is
+   structurally hard. A **profile** (`splatpipe/data/profiles/*.yaml`) holds
+   every hardware fact: match rules, lens axes and coverage, telemetry source,
+   default view density. A **driver** (`splatpipe/drivers/`) holds one
+   projection and answers exactly two questions — *what pixel is this ray*,
+   and *does this lens see it*. Everything downstream consumes the ingest
+   layout: `images/camN/*.jpg` (pinhole views) + `frames.jsonl` + optional
+   `geo.txt` (`camN/file.jpg lat lon alt`, WGS84).
+   New camera, known projection → **a YAML file**. New projection → one class,
+   three methods. Neither touches ingest, chunking, poses, or training.
 2. **Stage contract** — every stage is a plain CLI over files on disk. The
    whole chain runs on a laptop. Fan-out needs no scheduler integration: point
    N workers at the same chunk directory and they coordinate through the queue,
