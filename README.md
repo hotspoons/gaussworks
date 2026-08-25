@@ -143,6 +143,11 @@ Then:
 .venv/bin/splatpipe train  --chunks data/run1/chunks
 ```
 
+> **Starting from a fresh pod or handing this to someone else?**
+> [docs/HANDOFF.md](docs/HANDOFF.md) is the executable version of everything
+> below: provisioning from a raw `/workspace`, six verification gates, what to
+> copy up, current state of the work, and the traps that cost hours.
+
 ## Remote dev pod (Zipspace, single GPU)
 
 `deploy/devpod.yaml` stands up a 1-GPU remote-dev pod (VS Code plugin

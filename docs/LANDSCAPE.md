@@ -10,6 +10,9 @@ can still be used as **separate tools a user chooses to run** — that is a very
 different thing from vendoring them, and the distinction is what most of the
 licence column below is about.
 
+Standing up a pod from scratch: [HANDOFF.md](HANDOFF.md). Camera and lens
+geometry: [SEAM.md](SEAM.md).
+
 ## Licence rules of thumb
 
 | Tier | Licences | What we may do |
