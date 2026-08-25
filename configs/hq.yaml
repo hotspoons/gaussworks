@@ -21,7 +21,15 @@
 # the real answer to road-surface ambiguity.
 ingest:
   projection: equirect
-  extract_fps: 6
+  # Extract EVERY frame the camera shot (24 fps) even though we keep one per
+  # 1.25 m. Two reasons. First, at 21.5 mph a 6 fps extract puts candidates
+  # 1.60 m apart, so spacing_m never engages and the setting silently lies.
+  # Second, the frame we keep is the sharpest in its window, so more
+  # candidates per window is free quality -- 3 to choose from instead of 1.5.
+  # Denser than 1.25 m is poor value: consecutive frames half a metre apart
+  # are near-duplicate viewpoints that cost compute without constraining
+  # geometry. View count and both-direction coverage buy far more.
+  extract_fps: 24
   spacing_m: 1.25
   jpeg_quality: 96
   views:
