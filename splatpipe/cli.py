@@ -67,6 +67,8 @@ def main():
                    help="fraction down the frame where the rig may start")
     s.add_argument("--dark-pct", type=float, default=45.0,
                    help="percentile of median luminance treated as rig")
+    s.add_argument("--seam-band-deg", type=float, default=0.0,
+                   help="also mask this many degrees either side of the lens seam")
 
     s = sub.add_parser("status", help="queue state across chunks (pending/running/done/failed)")
     s.add_argument("--chunks", required=True, type=Path)
@@ -199,7 +201,8 @@ def main():
     elif args.cmd == "mask":
         from .mask import build
         build(args.frames, sample=args.sample, search_from=args.search_from,
-              dark_pct=args.dark_pct)
+              dark_pct=args.dark_pct, seam_band_deg=args.seam_band_deg,
+              views=_cfg(args.config, "ingest").get("views"))
 
     elif args.cmd == "status":
         from .poses import list_chunks

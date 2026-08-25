@@ -30,6 +30,30 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .reframe import DEFAULT_VIEWS
+
+
+def seam_mask(view: dict, band_deg: float = 6.0) -> np.ndarray:
+    """Mask the lens boundary out of one virtual view.
+
+    A .360 is two lenses, and every direction within a few degrees of the
+    plane between them exists twice in the file -- once per lens, from optical
+    centres ~3 cm apart and through different calibration. Those pixels
+    disagree geometrically, and a reconstruction resolves the disagreement by
+    growing two of everything near the seam. Since the rig is fixed and the
+    virtual views are at fixed angles, the boundary lands on the SAME pixels in
+    every frame, so a static mask removes the ambiguity for good.
+
+    Cheaper and more honest than pretending we can stitch: we drop the pixels
+    we cannot trust rather than blending two versions of the truth.
+    """
+    from .eac import view_dirs                     # noqa: PLC0415
+    d = view_dirs(view["width"], view["height"], view["fov"],
+                  view["yaw"], view["pitch"])
+    # lens axes are +-Y in this convention, so the boundary is |dir . Y| ~ 0
+    near_seam = np.abs(d[..., 1]) < np.sin(np.radians(band_deg))
+    return np.where(near_seam, 0, 255).astype(np.uint8)
+
 
 def _local_contrast(gray: np.ndarray, k: int = 7) -> np.ndarray:
     g = gray.astype(np.float32)
@@ -133,7 +157,8 @@ def vehicle_mask(paths: list[Path], shape: tuple[int, int], scale: int = 4,
 
 
 def build(frames_dir: Path, sample: int = 60, search_from: float = 0.35,
-          dark_pct: float = 45.0) -> Path:
+          dark_pct: float = 45.0, seam_band_deg: float = 0.0,
+          views: list[dict] | None = None) -> Path:
     frames_dir = Path(frames_dir)
     images = frames_dir / "images"
     out = frames_dir / "masks"
@@ -154,6 +179,15 @@ def build(frames_dir: Path, sample: int = 60, search_from: float = 0.35,
             continue
         mask = vehicle_mask(probe, (h, w), search_from=search_from,
                             dark_pct=dark_pct)
+        if seam_band_deg > 0:
+            specs = views or DEFAULT_VIEWS
+            k = int(cam.name.replace("cam", "")) if cam.name[3:].isdigit() else 0
+            if k < len(specs):
+                sm = seam_mask(specs[k], seam_band_deg)
+                if sm.shape != mask.shape:
+                    sm = cv2.resize(sm, (mask.shape[1], mask.shape[0]),
+                                    interpolation=cv2.INTER_NEAREST)
+                mask = np.minimum(mask, sm)
         covered = float((mask == 0).mean())
 
         cam_out = out / cam.name
