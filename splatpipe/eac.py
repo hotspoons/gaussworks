@@ -146,22 +146,43 @@ def eac_maps(dirs: np.ndarray, tpl: Template):
 
 
 class EacSampler:
-    """Resamples (track1, track2) frame pairs into pinhole views (or equirect)."""
+    """Resamples (track1, track2) frame pairs into pinhole views (or equirect).
 
-    def __init__(self, track_w: int, track_h: int):
+    `align` is the small rotation that brings the second lens into the first
+    lens' frame (see eac_align.py). Without it the two hemispheres disagree by
+    a fraction of a degree, which ghosts the overlap and grows duplicate
+    geometry near the seam in any reconstruction built from these frames.
+    """
+
+    def __init__(self, track_w: int, track_h: int, align: np.ndarray | None = None):
         self.tpl = Template.for_size(track_w, track_h)
+        self.align = align
         self._cache: dict = {}
 
     def _maps(self, key, dirs):
         if key not in self._cache:
-            self._cache[key] = eac_maps(dirs, self.tpl)
+            base = eac_maps(dirs, self.tpl)
+            if self.align is None:
+                self._cache[key] = base + (None,)
+            else:
+                # sample lens 2 along corrected directions, but keep the
+                # original face assignment so the two halves still meet where
+                # the layout says they do
+                self._cache[key] = base + (eac_maps(dirs @ self.align.T, self.tpl),)
         return self._cache[key]
 
     def sample(self, key, dirs, track1: np.ndarray, track2: np.ndarray) -> np.ndarray:
-        track, mx, my, mx2, w = self._maps(key, dirs)
-        pick = lambda x: np.where(track[..., None] == 0,
-                                  cv2.remap(track1, x, my, cv2.INTER_LINEAR),
-                                  cv2.remap(track2, x, my, cv2.INTER_LINEAR))
+        track, mx, my, mx2, w, aligned = self._maps(key, dirs)
+
+        def pick(x_primary):
+            a = cv2.remap(track1, x_primary, my, cv2.INTER_LINEAR)
+            if aligned is None:
+                b = cv2.remap(track2, x_primary, my, cv2.INTER_LINEAR)
+            else:
+                _, ax, ay, ax2, _ = aligned
+                b = cv2.remap(track2, ax if x_primary is mx else ax2, ay,
+                              cv2.INTER_LINEAR)
+            return np.where(track[..., None] == 0, a, b)
         primary = pick(mx).astype(np.float32)
         if not w.any():
             return primary.astype(np.uint8)

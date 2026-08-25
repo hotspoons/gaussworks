@@ -45,6 +45,12 @@ def main():
     s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
     s.add_argument("--min-frames", type=int, help="cells with fewer own frames are dropped")
 
+    s = sub.add_parser("align", help="estimate the .360 lens-to-lens rotation")
+    s.add_argument("video", type=Path)
+    s.add_argument("--out", type=Path)
+    s.add_argument("--at", type=float, default=120.0)
+    s.add_argument("--frames", type=int, default=3)
+
     s = sub.add_parser("flatten", help=".360 -> equirectangular mp4 for any 360 player")
     s.add_argument("video", type=Path)
     s.add_argument("--out", type=Path)
@@ -179,6 +185,10 @@ def main():
                     min_frames=args.min_frames if args.min_frames is not None
                     else cfg.get("min_frames", 20),
                     corridor_cfg=_cfg(args.config, "corridor"))
+
+    elif args.cmd == "align":
+        from .eac_align import calibrate
+        calibrate(args.video, args.out, at_s=args.at, frames=args.frames)
 
     elif args.cmd == "flatten":
         from .flatten import flatten
