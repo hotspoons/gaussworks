@@ -21,6 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake ninja-build build-essential git \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
+    libboost-filesystem-dev libboost-test-dev \
     libeigen3-dev libfreeimage-dev libmetis-dev \
     libgoogle-glog-dev libgflags-dev libsqlite3-dev \
     libflann-dev libsuitesparse-dev libcgal-dev libglew-dev \

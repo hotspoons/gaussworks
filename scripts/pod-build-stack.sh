@@ -41,6 +41,7 @@ echo "[build-stack] cores=$cores avail=${avail_gb}GB -> CXX_JOBS=$CXX_JOBS MAX_J
 sudo apt-get update -qq
 sudo apt-get install -y -qq cmake ninja-build build-essential git \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
+    libboost-filesystem-dev libboost-test-dev \
     libeigen3-dev libfreeimage-dev libmetis-dev libgoogle-glog-dev \
     libgflags-dev libsqlite3-dev libceres-dev libflann-dev \
     libsuitesparse-dev libcgal-dev libglew-dev
