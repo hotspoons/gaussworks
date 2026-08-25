@@ -86,6 +86,10 @@ def main():
     s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
     s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
+    s.add_argument("--mapper", choices=["auto", "glomap", "colmap"],
+                   default="auto",
+                   help="auto = glomap if installed. Pin it when the two "
+                        "disagree; see the version-skew note in poses.py")
     s.add_argument("--refresh", action="store_true",
                    help="re-extract features and re-match, instead of reusing "
                         "a complete database (the default)")
@@ -262,7 +266,7 @@ def main():
                   align=not args.no_align and cfg.get("align", True),
                   only=args.only,
                   spatial_radius=args.spatial_radius or cfg.get("spatial_radius", 4),
-                  refresh=args.refresh)
+                  refresh=args.refresh, mapper=args.mapper)
 
     elif args.cmd == "train":
         from .train import train_all

@@ -110,7 +110,7 @@ def _db_reusable(db: Path, chunk: Path) -> bool:
 
 def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
                 use_gpu: bool = True, spatial_radius: int = 4,
-                refresh: bool = False):
+                refresh: bool = False, mapper: str = "auto"):
     db = chunk / "colmap.db"
     sparse = chunk / "sparse"
     if (sparse / "0").exists():
@@ -124,7 +124,7 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
 
     gpu = "1" if use_gpu else "0"
     if reuse:
-        _map_and_align(chunk, db, sparse, align)
+        _map_and_align(chunk, db, sparse, align, mapper)
         return
 
     extract = ["colmap", "feature_extractor",
@@ -202,22 +202,53 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     _map_and_align(chunk, db, sparse, align)
 
 
-def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool):
+def _pick_mapper(mapper: str) -> str:
+    """Resolve 'auto' to a mapper that is actually installed.
+
+    Explicit, because "whatever is on PATH" is how a pod silently ran the slow
+    CPU mapper for a week -- and then, once GLOMAP was installed, how all four
+    chunks silently failed instead. Both are configuration facts and should be
+    stated, not discovered.
+    """
+    if mapper != "auto":
+        return mapper
+    return "glomap" if shutil.which("glomap") else "colmap"
+
+
+def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool,
+                   mapper: str = "auto"):
     raw = sparse / "raw"
     raw.mkdir(parents=True, exist_ok=True)
-    if shutil.which("glomap"):
+    mapper = _pick_mapper(mapper)
+    if mapper == "glomap" and not shutil.which("glomap"):
+        raise SystemExit("[poses] --mapper glomap requested but glomap is not "
+                         "on PATH (build it with scripts/pod-build-stack.sh)")
+    if mapper == "glomap":
         # Global SfM: solves rotation averaging then global positioning for all
         # images at once. The incremental mapper below instead adds images one
         # at a time with repeated bundle adjustment -- correct, but it is the
         # single longest stage in the pipeline by a wide margin (4.5 h on a
         # 3,870-image chunk, versus 73 min for GPU feature extraction and
         # matching combined) and it is CPU-bound with no CUDA path at all.
+        # VERSION SKEW WARNING. GLOMAP 1.2.0 vendors a COLMAP from Oct 2025,
+        # which models a multi-camera setup as a *rig*. Opening a database
+        # written by COLMAP 3.11.1 migrates in empty rigs/rig_sensors/frames
+        # tables, and GLOMAP then aborts at the very end -- after a complete,
+        # successful reconstruction -- writing the model out:
+        #     Check failed: existing_rig.RefSensorId() == rig.RefSensorId()
+        # Observed on all four street chunks, ~2 h each, wasted. Either match
+        # the COLMAP generation across the toolchain, or use GLOMAP 1.0.0.
+        # The real fix is to populate the rig properly: our 6 virtual cameras
+        # have EXACTLY known relative orientations (we synthesised them from
+        # the view plan), so they are a genuine rigid rig and declaring it
+        # would both satisfy this check and collapse 6 poses per position into
+        # 1 pose plus 6 fixed offsets. See docs/HANDOFF.md.
         _run(["glomap", "mapper", "--database_path", str(db),
               "--image_path", str(chunk / "images"), "--output_path", str(raw)])
     else:
-        print("[poses] glomap not on PATH -- falling back to COLMAP's "
-              "incremental mapper, which is CPU-only and much slower on "
-              "sequences this size", flush=True)
+        print("[poses] using COLMAP's incremental mapper: CPU-only and much "
+              "slower on sequences this size (measured 4h53m on 3,870 images "
+              "against 73 min for all the GPU stages combined)", flush=True)
         mapper = ["colmap", "mapper", "--database_path", str(db),
                   "--image_path", str(chunk / "images"), "--output_path", str(raw)]
         if _ba_gpu_available():
@@ -248,7 +279,7 @@ def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool):
 
 def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
               only: list[str] | None = None, spatial_radius: int = 4,
-              refresh: bool = False):
+              refresh: bool = False, mapper: str = "auto"):
     chunks = list_chunks(chunks_dir)
     if only:
         chunks = [c for c in chunks if any(o in c.name for o in only)]
@@ -257,7 +288,7 @@ def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
     print(f"[poses] worker {q.worker}: {len(chunks)} chunk(s) in the pool", flush=True)
     done, failed = q.run(chunks, lambda c: solve_chunk(
         c, matcher=matcher, align=align, spatial_radius=spatial_radius,
-        refresh=refresh))
+        refresh=refresh, mapper=mapper))
     print(f"[poses] worker {q.worker}: solved {len(done)}, failed {len(failed)}", flush=True)
     if failed:
         raise SystemExit(f"[poses] failed chunks: {failed}")
