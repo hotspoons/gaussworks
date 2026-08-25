@@ -136,7 +136,9 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                   views: list[dict] | None = None, extract_fps: float = 6.0,
                   spacing_m: float = 1.75, jpeg_quality: int = 95,
                   hwaccel: str | None = None, start_s: float = 0.0,
-                  duration_s: float | None = None) -> Path:
+                  duration_s: float | None = None,
+                  near: tuple[float, float] | None = None,
+                  radius_m: float = 400.0) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     is_360 = any(v.suffix.lower() == ".360" for v in videos)
     writer = FrameWriter(out, projection="eac" if is_360 else projection,
@@ -167,6 +169,21 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                     lat = lon = alt = [None] * len(cands)
                     dist = None
 
+                # Spatial slice: keep only what is near a point of interest.
+                # A capture drives past the same place several times, in both
+                # directions and across chapter boundaries; filtering by
+                # position (not by time) gathers every one of those passes
+                # while ignoring the rest of the drive, which is what makes a
+                # high-quality run on one area affordable.
+                in_area = None
+                if near is not None and gps:
+                    from .geo import ll_to_enu       # noqa: PLC0415
+                    origin = (near[0], near[1], 0.0)
+                    in_area = []
+                    for la, lo in zip(lat, lon):
+                        e, n, _ = ll_to_enu(la, lo, 0.0, origin)
+                        in_area.append(e * e + n * n <= radius_m * radius_m)
+
                 if dist is None or spacing_m <= 0:
                     keep = range(len(cands))  # no GPS / spacing off: keep all
                 else:
@@ -176,6 +193,11 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                         if dist[i] >= next_d:
                             keep.append(max(window, key=lambda j: sharpness(cands[j][1])))
                             window, next_d = [], dist[i] + spacing_m
+                if in_area is not None:
+                    before = len(list(keep))
+                    keep = [i for i in keep if in_area[i]]
+                    print(f"[ingest] {video.name}: {len(keep)}/{before} frames "
+                          f"within {radius_m:.0f} m of the area")
                 for i in keep:
                     t, path = cands[i]
                     img = cv2.imread(str(path))

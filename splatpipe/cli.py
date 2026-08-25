@@ -28,6 +28,8 @@ def main():
     s.add_argument("--hwaccel", help="ffmpeg decoder, e.g. cuda (8K HEVC is decode-bound)")
     s.add_argument("--start-s", type=float, default=0.0, help="skip into the clip")
     s.add_argument("--duration-s", type=float, help="ingest only this many seconds")
+    s.add_argument("--near", help="lat,lon: keep only frames near this point")
+    s.add_argument("--radius-m", type=float, default=400.0)
 
     s = sub.add_parser("mapillary", help="fetch 360 sequences w/ GPS from Mapillary")
     s.add_argument("--bbox", required=True, help="w,s,e,n")
@@ -40,6 +42,15 @@ def main():
     s.add_argument("--cell-m", type=float, help="grid cell size, metres (0 = one chunk)")
     s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
     s.add_argument("--min-frames", type=int, help="cells with fewer own frames are dropped")
+
+    s = sub.add_parser("flatten", help=".360 -> equirectangular mp4 for any 360 player")
+    s.add_argument("video", type=Path)
+    s.add_argument("--out", type=Path)
+    s.add_argument("--width", type=int, default=4096)
+    s.add_argument("--fps", type=float, help="defaults to the source rate")
+    s.add_argument("--start-s", type=float, default=0.0)
+    s.add_argument("--duration-s", type=float)
+    s.add_argument("--hwaccel", help="e.g. cuda")
 
     s = sub.add_parser("mask", help="auto-mask the capture vehicle out of every frame")
     s.add_argument("--frames", required=True, type=Path)
@@ -145,7 +156,9 @@ def main():
             else cfg.get("spacing_m", 1.75),
             jpeg_quality=cfg.get("jpeg_quality", 95),
             hwaccel=args.hwaccel or cfg.get("hwaccel"),
-            start_s=args.start_s, duration_s=args.duration_s)
+            start_s=args.start_s, duration_s=args.duration_s,
+            near=(tuple(float(v) for v in args.near.split(",")) if args.near else None),
+            radius_m=args.radius_m)
 
     elif args.cmd == "mapillary":
         from .mapillary import fetch
@@ -164,6 +177,12 @@ def main():
                     min_frames=args.min_frames if args.min_frames is not None
                     else cfg.get("min_frames", 20),
                     corridor_cfg=_cfg(args.config, "corridor"))
+
+    elif args.cmd == "flatten":
+        from .flatten import flatten
+        flatten(args.video, args.out, width=args.width, fps=args.fps,
+                start_s=args.start_s, duration_s=args.duration_s,
+                hwaccel=args.hwaccel)
 
     elif args.cmd == "mask":
         from .mask import build
