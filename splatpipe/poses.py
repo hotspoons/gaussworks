@@ -7,6 +7,7 @@ Work is claimed from a shared queue (see queue.py), so any number of workers
 on any number of nodes can be pointed at the same chunk directory.
 """
 
+import functools
 import json
 import os
 import shutil
@@ -14,6 +15,30 @@ import subprocess
 from pathlib import Path
 
 from .workqueue import WorkQueue
+
+
+@functools.lru_cache(maxsize=1)
+def _ba_gpu_available() -> bool:
+    """Can bundle adjustment run on the GPU?
+
+    COLMAP exposes --Mapper.ba_use_gpu, but it only does anything if the CERES
+    it links was built with CUDA -- and the distro libceres is not. Passing the
+    flag blindly on such a build either does nothing or fails deep inside the
+    mapper, hours in. So probe the linkage instead of assuming: cuSOLVER /
+    cuSPARSE in colmap's dependency list is the tell.
+
+    (SIFT extraction and matching are a separate story and use the GPU on any
+    CUDA-enabled COLMAP, which is where most of the pre-mapper time goes.)
+    """
+    exe = shutil.which("colmap")
+    if not exe:
+        return False
+    try:
+        out = subprocess.run(["ldd", exe], capture_output=True,
+                             check=False).stdout.decode().lower()
+    except OSError:
+        return False
+    return any(lib in out for lib in ("libcusolver", "libcusparse"))
 
 
 def _run(cmd: list[str], cwd: Path | None = None):
@@ -132,11 +157,24 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     raw = sparse / "raw"
     raw.mkdir(exist_ok=True)
     if shutil.which("glomap"):
+        # Global SfM: solves rotation averaging then global positioning for all
+        # images at once. The incremental mapper below instead adds images one
+        # at a time with repeated bundle adjustment -- correct, but it is the
+        # single longest stage in the pipeline by a wide margin (4.5 h on a
+        # 3,870-image chunk, versus 73 min for GPU feature extraction and
+        # matching combined) and it is CPU-bound with no CUDA path at all.
         _run(["glomap", "mapper", "--database_path", str(db),
               "--image_path", str(chunk / "images"), "--output_path", str(raw)])
     else:
-        _run(["colmap", "mapper", "--database_path", str(db),
-              "--image_path", str(chunk / "images"), "--output_path", str(raw)])
+        print("[poses] glomap not on PATH -- falling back to COLMAP's "
+              "incremental mapper, which is CPU-only and much slower on "
+              "sequences this size", flush=True)
+        mapper = ["colmap", "mapper", "--database_path", str(db),
+                  "--image_path", str(chunk / "images"), "--output_path", str(raw)]
+        if _ba_gpu_available():
+            mapper += ["--Mapper.ba_use_gpu", "1"]
+            print("[poses] ceres has CUDA: bundle adjustment on GPU", flush=True)
+        _run(mapper)
     model = _largest_model(raw)
 
     final = sparse / "0"

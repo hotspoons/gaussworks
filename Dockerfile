@@ -13,7 +13,7 @@ ARG BASE_IMAGE=harbor.tools.basedweights.com/patapsco.ai/ai-dev-pod:0.12.0
 # --- SfM builder --------------------------------------------------------------
 FROM ${BASE_IMAGE} AS sfm-builder
 ARG COLMAP_VER=3.11.1
-ARG GLOMAP_VER=1.0.0
+ARG GLOMAP_VER=1.2.0
 ARG CUDA_ARCHS=80;89;90;120
 
 USER root
@@ -23,8 +23,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libfreeimage-dev libmetis-dev \
     libgoogle-glog-dev libgflags-dev libsqlite3-dev \
-    libceres-dev libflann-dev libsuitesparse-dev libcgal-dev libglew-dev \
+    libflann-dev libsuitesparse-dev libcgal-dev libglew-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Ceres FROM SOURCE with CUDA. The distro libceres-dev has no CUDA support, so
+# COLMAP's --Mapper.ba_use_gpu silently buys nothing when linked against it --
+# and bundle adjustment inside the incremental mapper is the longest CPU stage
+# in the whole pipeline. Building it here is what makes that flag real; poses.py
+# probes colmap's linkage (cuSOLVER/cuSPARSE) before passing it.
+ARG CERES_VER=2.2.0
+RUN git clone --depth 1 -b ${CERES_VER} https://github.com/ceres-solver/ceres-solver /tmp/ceres \
+    && cmake -S /tmp/ceres -B /tmp/ceres/build -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+        -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+        -DCMAKE_INSTALL_PREFIX=/opt/sfm \
+    && cmake --build /tmp/ceres/build --target install \
+    && rm -rf /tmp/ceres
 
 # Headless COLMAP (no Qt/GUI) with CUDA SIFT + CUDA bundle adjustment
 RUN git clone --depth 1 -b ${COLMAP_VER} https://github.com/colmap/colmap /tmp/colmap \
@@ -32,15 +47,19 @@ RUN git clone --depth 1 -b ${COLMAP_VER} https://github.com/colmap/colmap /tmp/c
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
         -DGUI_ENABLED=OFF \
+        -DCMAKE_PREFIX_PATH=/opt/sfm \
         -DCMAKE_INSTALL_PREFIX=/opt/sfm \
     && cmake --build /tmp/colmap/build --target install \
     && rm -rf /tmp/colmap
 
 # GLOMAP: global SfM, much faster than incremental mapper on road sequences
-RUN git clone --depth 1 -b v${GLOMAP_VER} https://github.com/colmap/glomap /tmp/glomap \
+# NB: GLOMAP's tags carry no "v" prefix (1.2.0, not v1.2.0). `-b v1.0.0` fails
+# the clone, which is how this stage was silently absent from the running pod.
+RUN git clone --depth 1 -b ${GLOMAP_VER} https://github.com/colmap/glomap /tmp/glomap \
     && cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+        -DCMAKE_PREFIX_PATH=/opt/sfm \
         -DCMAKE_INSTALL_PREFIX=/opt/sfm \
     && cmake --build /tmp/glomap/build --target install \
     && rm -rf /tmp/glomap
