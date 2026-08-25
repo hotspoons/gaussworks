@@ -11,6 +11,7 @@ import functools
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -70,18 +71,62 @@ def _rig_size(chunk: Path) -> tuple[int, int]:
     return n_cams, n_pass
 
 
+def _db_reusable(db: Path, chunk: Path) -> bool:
+    """Does this database already hold features and matches for these images?
+
+    Extraction and matching are the expensive GPU stages (73 min on a
+    3,870-image chunk) and they depend only on the images and masks -- not on
+    which mapper runs afterwards. Wiping the database to retry a FAILED MAPPER,
+    or to switch from the incremental mapper to GLOMAP, throws away an hour of
+    finished work for no reason. So reuse it when it is complete and matches
+    the images on disk, and start clean otherwise.
+    """
+    if not db.exists():
+        return False
+    n_disk = sum(1 for _ in (chunk / "images").glob("*/*.jpg"))
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            n_img = con.execute("SELECT count(*) FROM images").fetchone()[0]
+            n_kp = con.execute("SELECT count(*) FROM keypoints").fetchone()[0]
+            n_pairs = con.execute(
+                "SELECT count(*) FROM two_view_geometries WHERE rows > 0").fetchone()[0]
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        print(f"[poses] {chunk.name}: database unreadable ({exc}); rebuilding",
+              flush=True)
+        return False
+    if n_img != n_disk or n_kp < n_img or n_pairs == 0:
+        print(f"[poses] {chunk.name}: database incomplete "
+              f"({n_img} images vs {n_disk} on disk, {n_kp} with keypoints, "
+              f"{n_pairs} verified pairs); rebuilding", flush=True)
+        return False
+    print(f"[poses] {chunk.name}: reusing features and matches "
+          f"({n_img} images, {n_pairs} verified pairs) -- mapping only",
+          flush=True)
+    return True
+
+
 def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
-                use_gpu: bool = True, spatial_radius: int = 4):
+                use_gpu: bool = True, spatial_radius: int = 4,
+                refresh: bool = False):
     db = chunk / "colmap.db"
     sparse = chunk / "sparse"
     if (sparse / "0").exists():
         print(f"[poses] {chunk.name}: sparse/0 exists, skipping", flush=True)
         return
-    if db.exists():
+    reuse = not refresh and _db_reusable(db, chunk)
+    if db.exists() and not reuse:
         db.unlink()  # stale partial runs poison the database; start clean
     sparse.mkdir(exist_ok=True)
+    shutil.rmtree(sparse / "raw", ignore_errors=True)   # half-built model
 
     gpu = "1" if use_gpu else "0"
+    if reuse:
+        _map_and_align(chunk, db, sparse, align)
+        return
+
     extract = ["colmap", "feature_extractor",
                "--database_path", str(db), "--image_path", str(chunk / "images"),
                "--ImageReader.camera_model", "PINHOLE",
@@ -154,8 +199,12 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
               "--SequentialMatching.overlap", "15",
               "--SiftMatching.use_gpu", gpu])
 
+    _map_and_align(chunk, db, sparse, align)
+
+
+def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool):
     raw = sparse / "raw"
-    raw.mkdir(exist_ok=True)
+    raw.mkdir(parents=True, exist_ok=True)
     if shutil.which("glomap"):
         # Global SfM: solves rotation averaging then global positioning for all
         # images at once. The incremental mapper below instead adds images one
@@ -198,7 +247,8 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
 
 
 def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
-              only: list[str] | None = None, spatial_radius: int = 4):
+              only: list[str] | None = None, spatial_radius: int = 4,
+              refresh: bool = False):
     chunks = list_chunks(chunks_dir)
     if only:
         chunks = [c for c in chunks if any(o in c.name for o in only)]
@@ -206,7 +256,8 @@ def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
     q = WorkQueue(chunks_dir, "poses")
     print(f"[poses] worker {q.worker}: {len(chunks)} chunk(s) in the pool", flush=True)
     done, failed = q.run(chunks, lambda c: solve_chunk(
-        c, matcher=matcher, align=align, spatial_radius=spatial_radius))
+        c, matcher=matcher, align=align, spatial_radius=spatial_radius,
+        refresh=refresh))
     print(f"[poses] worker {q.worker}: solved {len(done)}, failed {len(failed)}", flush=True)
     if failed:
         raise SystemExit(f"[poses] failed chunks: {failed}")

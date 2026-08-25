@@ -86,6 +86,9 @@ def main():
     s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
     s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
+    s.add_argument("--refresh", action="store_true",
+                   help="re-extract features and re-match, instead of reusing "
+                        "a complete database (the default)")
     s.add_argument("--spatial-radius", type=int, default=4,
                    help="spatial matching reach, in capture positions either "
                         "side (scaled internally by cameras x passes)")
@@ -258,7 +261,8 @@ def main():
                   matcher=args.matcher or cfg.get("matcher", "spatial"),
                   align=not args.no_align and cfg.get("align", True),
                   only=args.only,
-                  spatial_radius=args.spatial_radius or cfg.get("spatial_radius", 4))
+                  spatial_radius=args.spatial_radius or cfg.get("spatial_radius", 4),
+                  refresh=args.refresh)
 
     elif args.cmd == "train":
         from .train import train_all
