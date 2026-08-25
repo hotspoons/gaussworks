@@ -7,6 +7,12 @@
   at driving speeds; RTK-grade sync can come later if it ever matters.
 - Candidate frames are extracted at extract_fps, then one frame is kept per
   spacing_m of travel: the sharpest (Laplacian variance) in each window.
+- Extraction runs in SEGMENTS. Candidates are full-resolution stills (a .360
+  is two 5952x1920 tracks), so dumping a whole clip at source frame rate costs
+  tens of GB per chapter before a single frame is selected. Segmenting bounds
+  that to a minute of footage at a time, while distances come from the GPS
+  track rather than the candidate list so selection is unaffected by where the
+  segment boundaries fall.
 - .360 (GoPro EAC) is handled natively: both video tracks are extracted and
   splatpipe.eac remaps EAC -> pinhole views in a single resample.
 """
@@ -22,13 +28,19 @@ import cv2
 import numpy as np
 
 from .eac import EacSampler, view_dirs
-from .geo import track_distances
+from .geo import ll_to_enu, track_distances
 from .reframe import DEFAULT_VIEWS
 from .writer import FrameWriter
 
 
 def _run_json(cmd: list[str]):
     return json.loads(subprocess.run(cmd, check=True, capture_output=True).stdout)
+
+
+def video_duration(video: Path) -> float:
+    probe = _run_json(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                       "-of", "json", str(video)])
+    return float(probe["format"]["duration"])
 
 
 def video_fps(video: Path) -> float:
@@ -138,86 +150,105 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                   hwaccel: str | None = None, start_s: float = 0.0,
                   duration_s: float | None = None,
                   near: tuple[float, float] | None = None,
-                  radius_m: float = 400.0) -> Path:
+                  radius_m: float = 400.0, segment_s: float = 60.0) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     is_360 = any(v.suffix.lower() == ".360" for v in videos)
     writer = FrameWriter(out, projection="eac" if is_360 else projection,
                          views=views, jpeg_quality=jpeg_quality)
     eac_sampler = None
+    eac_dirs = None
     view_specs = views or DEFAULT_VIEWS
     try:
         for video in videos:
             native_360 = video.suffix.lower() == ".360"
             gps = extract_telemetry(video)
-            with tempfile.TemporaryDirectory(dir=out, prefix=".candidates-") as td:
-                if native_360:
-                    pairs = extract_candidates_360(video, Path(td), extract_fps,
-                                                   hwaccel=hwaccel, start_s=start_s,
-                                                   duration_s=duration_s)
-                    cands = [(t, p1) for t, p1, _ in pairs]
-                else:
-                    cands = extract_candidates(video, Path(td), extract_fps,
-                                               hwaccel=hwaccel, start_s=start_s,
-                                               duration_s=duration_s)
-                if gps:
-                    gt = np.array([p["t"] for p in gps])
-                    lat = np.interp([t for t, _ in cands], gt, [p["lat"] for p in gps])
-                    lon = np.interp([t for t, _ in cands], gt, [p["lon"] for p in gps])
-                    alt = np.interp([t for t, _ in cands], gt, [p["alt"] for p in gps])
-                    dist = track_distances(list(lat), list(lon))
-                else:
-                    lat = lon = alt = [None] * len(cands)
-                    dist = None
+            if gps:
+                gt = np.array([p["t"] for p in gps])
+                glat = np.array([p["lat"] for p in gps])
+                glon = np.array([p["lon"] for p in gps])
+                galt = np.array([p["alt"] for p in gps])
+                # distance along the GPS track, so a candidate's distance
+                # depends only on its timestamp -- segment boundaries cannot
+                # shift the selection
+                gdist = np.array(track_distances(list(glat), list(glon)))
+            centre = (near[0], near[1], 0.0) if near else None
 
-                # Spatial slice: keep only what is near a point of interest.
-                # A capture drives past the same place several times, in both
-                # directions and across chapter boundaries; filtering by
-                # position (not by time) gathers every one of those passes
-                # while ignoring the rest of the drive, which is what makes a
-                # high-quality run on one area affordable.
-                in_area = None
-                if near is not None and gps:
-                    from .geo import ll_to_enu       # noqa: PLC0415
-                    origin = (near[0], near[1], 0.0)
-                    in_area = []
-                    for la, lo in zip(lat, lon):
-                        e, n, _ = ll_to_enu(la, lo, 0.0, origin)
-                        in_area.append(e * e + n * n <= radius_m * radius_m)
-
-                if dist is None or spacing_m <= 0:
-                    keep = range(len(cands))  # no GPS / spacing off: keep all
-                else:
-                    keep, window, next_d = [], [], 0.0
-                    for i in range(len(cands)):
-                        window.append(i)
-                        if dist[i] >= next_d:
-                            keep.append(max(window, key=lambda j: sharpness(cands[j][1])))
-                            window, next_d = [], dist[i] + spacing_m
-                if in_area is not None:
-                    before = len(list(keep))
-                    keep = [i for i in keep if in_area[i]]
-                    print(f"[ingest] {video.name}: {len(keep)}/{before} frames "
-                          f"within {radius_m:.0f} m of the area")
-                for i in keep:
-                    t, path = cands[i]
-                    img = cv2.imread(str(path))
-                    if img is None:
-                        continue
+            end_s = start_s + duration_s if duration_s else video_duration(video)
+            next_d, kept_here, seen_here = 0.0, 0, 0
+            seg = seg_start = start_s
+            while seg_start < end_s - 1e-3:
+                seg_len = min(segment_s, end_s - seg_start)
+                with tempfile.TemporaryDirectory(dir=out, prefix=".cand-") as td:
                     if native_360:
-                        img2 = cv2.imread(str(pairs[i][2]))
-                        if img2 is None:
-                            continue
-                        if eac_sampler is None:
-                            eac_sampler = EacSampler(img.shape[1], img.shape[0])
-                            eac_dirs = [view_dirs(v["width"], v["height"], v["fov"],
-                                                  v["yaw"], v["pitch"]) for v in view_specs]
-                        cams = [eac_sampler.sample(("view", k), d, img, img2)
-                                for k, d in enumerate(eac_dirs)]
-                        writer.add_views(cams, lat[i], lon[i], alt[i], t=t,
-                                         meta={"video": video.name})
+                        pairs = extract_candidates_360(video, Path(td), extract_fps,
+                                                       hwaccel=hwaccel,
+                                                       start_s=seg_start,
+                                                       duration_s=seg_len)
+                        cands = [(t, p1) for t, p1, _ in pairs]
                     else:
-                        writer.add(img, lat[i], lon[i], alt[i], t=t, meta={"video": video.name})
-            print(f"[ingest] {video.name}: gps_samples={len(gps)} kept={writer.seq}")
+                        pairs = None
+                        cands = extract_candidates(video, Path(td), extract_fps,
+                                                   hwaccel=hwaccel, start_s=seg_start,
+                                                   duration_s=seg_len)
+                    seen_here += len(cands)
+                    if not cands:
+                        seg_start += seg_len
+                        continue
+
+                    times = np.array([t for t, _ in cands])
+                    if gps:
+                        lat = np.interp(times, gt, glat)
+                        lon = np.interp(times, gt, glon)
+                        alt = np.interp(times, gt, galt)
+                        dist = np.interp(times, gt, gdist)
+                    else:
+                        lat = lon = alt = [None] * len(cands)
+                        dist = None
+
+                    if dist is None or spacing_m <= 0:
+                        keep = list(range(len(cands)))
+                    else:
+                        keep, window = [], []
+                        for i in range(len(cands)):
+                            window.append(i)
+                            if dist[i] >= next_d:
+                                keep.append(max(window,
+                                                key=lambda j: sharpness(cands[j][1])))
+                                window, next_d = [], dist[i] + spacing_m
+
+                    if centre is not None and gps:
+                        keep = [i for i in keep
+                                if sum(c * c for c in
+                                       ll_to_enu(lat[i], lon[i], 0.0, centre)[:2])
+                                <= radius_m * radius_m]
+
+                    for i in keep:
+                        t, path = cands[i]
+                        img = cv2.imread(str(path))
+                        if img is None:
+                            continue
+                        if native_360:
+                            img2 = cv2.imread(str(pairs[i][2]))
+                            if img2 is None:
+                                continue
+                            if eac_sampler is None:
+                                eac_sampler = EacSampler(img.shape[1], img.shape[0])
+                                eac_dirs = [view_dirs(v["width"], v["height"],
+                                                      v["fov"], v["yaw"], v["pitch"])
+                                            for v in view_specs]
+                            cams = [eac_sampler.sample(("view", k), d, img, img2)
+                                    for k, d in enumerate(eac_dirs)]
+                            writer.add_views(cams, lat[i], lon[i], alt[i], t=t,
+                                             meta={"video": video.name})
+                        else:
+                            writer.add(img, lat[i], lon[i], alt[i], t=t,
+                                       meta={"video": video.name})
+                        kept_here += 1
+                seg_start += seg_len
+                print(f"[ingest] {video.name}: {seg_start - start_s:6.0f}s / "
+                      f"{end_s - start_s:.0f}s, kept {kept_here}", flush=True)
+            print(f"[ingest] {video.name}: gps_samples={len(gps)} "
+                  f"candidates={seen_here} kept={kept_here}", flush=True)
     finally:
         writer.close()
     return out

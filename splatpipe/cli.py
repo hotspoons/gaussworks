@@ -30,6 +30,8 @@ def main():
     s.add_argument("--duration-s", type=float, help="ingest only this many seconds")
     s.add_argument("--near", help="lat,lon: keep only frames near this point")
     s.add_argument("--radius-m", type=float, default=400.0)
+    s.add_argument("--segment-s", type=float, default=60.0,
+                   help="extract in chunks this long; bounds temp disk use")
 
     s = sub.add_parser("mapillary", help="fetch 360 sequences w/ GPS from Mapillary")
     s.add_argument("--bbox", required=True, help="w,s,e,n")
@@ -158,7 +160,7 @@ def main():
             hwaccel=args.hwaccel or cfg.get("hwaccel"),
             start_s=args.start_s, duration_s=args.duration_s,
             near=(tuple(float(v) for v in args.near.split(",")) if args.near else None),
-            radius_m=args.radius_m)
+            radius_m=args.radius_m, segment_s=args.segment_s)
 
     elif args.cmd == "mapillary":
         from .mapillary import fetch
