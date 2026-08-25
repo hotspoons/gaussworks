@@ -69,13 +69,42 @@ licence column below is about.
 
 - **The capture vehicle is rigid in the camera frame**, so it lands on the same pixels forever: COLMAP matches features on your own roof, and the trainer fits a surface that is somewhere different in every frame. One static mask per camera fixes both.
 - **Staticness and edge tests fail on glossy paint/glass** — moving reflections make a roof look dynamic. Keying on the temporal median being darker works; hand-drawn masks are the escape hatch.
-- **gsplat supports per-camera masks but its COLMAP parser never loads them** (`mask_dict[camera_id] = None`). Masks reach COLMAP and not training unless you patch it. *(open)*
+- **gsplat supports per-camera masks but its COLMAP parser never loads them** (`mask_dict[camera_id] = None`). Masks reach COLMAP and not training unless you patch it -- see `splatpipe/gsplat_masked.py`.
+- **A module named `queue.py` inside the package shadows the stdlib `queue`** for any script run from that directory; torch imports `from queue import Queue` deep in its stack and training dies. Renamed to `workqueue.py`.
+- **gsplat normalises world space by default**, recentring and rescaling into a unit box -- which silently discards the shared ENU frame that merge, mesh and drive all depend on. Train with `--no-normalize-world-space`.
 - **Virtual views can under-sample the sphere.** 4 × 100° at 1600 px is 16 px/deg, while 8K EAC faces hold ~21. *(open)*
 - Reframe at high shutter speed; motion blur is unfixable downstream.
 
-## Open questions
+## Measurements
 
-- Does masking in training measurably improve PSNR on foliage-heavy capture?
+Controlled runs on one 150 m chunk of real neighbourhood capture (942 images,
+6 virtual views, 30k steps), scored with `splatpipe eval` on visible pixels
+only -- the trainer's own PSNR is unusable here, see below.
+
+| Config | PSNR (visible) | Gaussians |
+| --- | --- | --- |
+| no mask, no AA, no regularisers | 22.80 dB | 278,025 |
+| mask + AA + opacity/scale reg | 21.87 dB | 171,280 |
+| **mask + AA, no regularisers** | **23.07 dB** | **293,014** |
+
+Conclusions: masking the capture vehicle plus anti-aliasing is the best
+configuration; `--opacity-reg 0.001 --scale-reg 0.01` cost 1.2 dB and pruned
+40% of the gaussians, so they are off by default. Applying them was a guess
+(aimed at needle artefacts) bundled into a run with two other changes, which
+is how a regression hides.
+
+Separately, the ingest profile change alone (4 views x 100 deg at 1600 px ->
+6 x 80 deg at 1920 px, spacing 1.75 -> 1.25 m) took an unmasked 15k-step
+model from 18.93 to 20.32 dB all-pixel PSNR, and registration from 91% to
+99.8% (385/424 -> 940/942).
+
+**Never compare runs using the trainer's PSNR when masks differ.** gsplat
+zeroes masked pixels in the render but not the ground truth, so a masked model
+is scored against the vehicle it was told to ignore: 36% of frame here, ~4.5
+dB of penalty. That metric would have concluded "never mask", exactly
+backwards.
+
+## Open questions
 - Is Brush a viable second trainer, and does it unlock non-CUDA hardware?
 - Which texture-bake path is both good and permissive (mvs-texturing licence pending)?
 - Does depth fusion behave on driving capture, or do we switch to MVS?
