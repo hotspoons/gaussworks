@@ -70,6 +70,11 @@ def main():
     s.add_argument("--out", type=Path, default=Path("data/verify"))
     s.add_argument("--at", type=float, default=5.0, help="seconds into the clip")
 
+    s = sub.add_parser("eval", help="compare checkpoints on visible (unmasked) pixels")
+    s.add_argument("--chunk", required=True, type=Path)
+    s.add_argument("ckpts", nargs="+", type=Path)
+    s.add_argument("--test-every", type=int, default=8)
+
     s = sub.add_parser("merge", help="chunk splats -> one streamable world (tiles + world.json)")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--out", required=True, type=Path)
@@ -191,6 +196,10 @@ def main():
     elif args.cmd == "verify":
         from .verify import verify
         verify(args.video, args.out, at_s=args.at)
+
+    elif args.cmd == "eval":
+        from .evaluate import evaluate
+        evaluate(args.chunk, args.ckpts, test_every=args.test_every)
 
     elif args.cmd == "merge":
         from .merge import merge

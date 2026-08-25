@@ -42,12 +42,8 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
            "--save-ply", "--disable-viewer",
            "--no-normalize-world-space",   # keep gaussians in the project ENU frame
            # Anti-aliasing matters when the same surface is seen from 2 m and
-           # from 60 m in one chunk, which is every driving capture. The two
-           # regularisers suppress the needle-shaped gaussians that show up as
-           # thin streaks across the sky.
+           # from 60 m in one chunk, which is every driving capture.
            "--antialiased",
-           "--opacity-reg", "0.001",
-           "--scale-reg", "0.01",
            *extra]
     print("[train] $", " ".join(cmd))
     subprocess.run(cmd, check=True, env=env)

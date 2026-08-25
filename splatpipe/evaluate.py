@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Compare trained models fairly, which the trainer's own PSNR cannot.
+
+gsplat zeroes masked pixels in the render but not in the ground truth, so a
+mask-trained model is scored against the vehicle it was told to ignore: on our
+capture that is 36% of every frame counted as pure error, and reported PSNR
+drops ~4.5 dB for a model that may in fact be better. Comparing runs by that
+number silently rewards NOT masking.
+
+This scores only the pixels a model was actually asked to reproduce -- the
+unmasked region -- so masked and unmasked runs are directly comparable, and
+so are two masked runs with different mask coverage.
+"""
+
+import sys
+from pathlib import Path
+
+import numpy as np
+
+
+def _val_indices(n: int, test_every: int = 8) -> list[int]:
+    return list(range(0, n, test_every))
+
+
+def evaluate(chunk: Path, ckpts: list[Path], examples: Path | None = None,
+             test_every: int = 8) -> dict:
+    import cv2                                     # noqa: PLC0415
+    import torch                                   # noqa: PLC0415
+    from gsplat import rasterization               # noqa: PLC0415
+
+    from .mesh import _load_parser, _load_splats   # noqa: PLC0415
+
+    chunk = Path(chunk)
+    parser = _load_parser(chunk)
+    idx = _val_indices(len(parser.image_paths), test_every)
+
+    masks = {}
+    for cam_id, path in zip(parser.camera_ids, parser.image_paths):
+        cam_id = int(cam_id)
+        if cam_id not in masks:
+            found = sorted((chunk / "masks" / Path(path).parent.name).glob("*.png"))
+            m = cv2.imread(str(found[0]), cv2.IMREAD_GRAYSCALE) if found else None
+            masks[cam_id] = (m > 127) if m is not None else None
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    results = {}
+    for ckpt in ckpts:
+        splats = _load_splats(Path(ckpt), device)
+        sh_degree = int(round(splats["sh"].shape[1] ** 0.5)) - 1
+        psnrs = []
+        for i in idx:
+            cam_id = int(parser.camera_ids[i])
+            K = torch.tensor(parser.Ks_dict[cam_id], dtype=torch.float32, device=device)
+            c2w = torch.tensor(parser.camtoworlds[i], dtype=torch.float32, device=device)
+            gt = cv2.cvtColor(cv2.imread(parser.image_paths[i]),
+                              cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            h, w = gt.shape[:2]
+            with torch.no_grad():
+                img, _, _ = rasterization(
+                    splats["means"], splats["quats"], splats["scales"],
+                    splats["opacities"], splats["sh"],
+                    torch.linalg.inv(c2w)[None], K[None], w, h,
+                    sh_degree=sh_degree, render_mode="RGB")
+            pred = img[0].clamp(0, 1).cpu().numpy()
+            keep = masks.get(cam_id)
+            diff = (pred - gt) if keep is None else (pred - gt)[keep]
+            psnrs.append(10 * np.log10(1.0 / max(float((diff ** 2).mean()), 1e-12)))
+        results[str(ckpt)] = {"psnr_visible": round(float(np.mean(psnrs)), 3),
+                              "views": len(idx),
+                              "gaussians": int(len(splats["means"]))}
+        print(f"[eval] {Path(ckpt).parent.parent.name:22s} "
+              f"PSNR(visible) {results[str(ckpt)]['psnr_visible']:6.2f} dB  "
+              f"{results[str(ckpt)]['gaussians']:>8,} gaussians", flush=True)
+    return results
