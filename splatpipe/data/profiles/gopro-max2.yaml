@@ -1,0 +1,28 @@
+name: gopro-max2
+driver: gopro_eac
+telemetry: gpmf
+status: validated       # decoded and eyeballed against real 8K capture
+priority: 10
+match:
+  suffix: [".360"]
+  tracks: 2
+  track_size: [[5952, 1920]]
+geometry:
+  # EAC track layout: [ side-section | centre face | side-section ], each side
+  # section holding two half-faces that overlap in `blend_px`. Derived as
+  # side = (W - H) / 2 = 2016, face = H = 1920, blend = side - face = 96.
+  blend_px: 96
+lenses:
+  # Back-to-back hemispheres. half_fov_deg is left null: gopro_eac derives it
+  # from blend_px, which is where the truth actually lives (96 px of overlap
+  # in a 2016 px side section works out to ~94.7 deg per lens).
+  - {name: front, axis: [0, 1, 0],  center_mm: [0,  16, 0]}
+  - {name: rear,  axis: [0, -1, 0], center_mm: [0, -16, 0]}
+defaults:
+  px_per_deg: 24        # source EAC density is ~21 px/deg; don't undersample it
+  fov: 80
+  pitch: [-12]
+notes: |
+  center_mm is APPROXIMATE (body thickness, not a calibration). Nothing in the
+  pipeline depends on it -- SfM recovers the baseline -- it is recorded so the
+  expected parallax is documented rather than folklore.

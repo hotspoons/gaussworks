@@ -20,6 +20,10 @@ import cv2
 import numpy as np
 import requests
 
+from . import viewplan
+from .drivers import get_driver
+from .profiles import get as get_profile
+from .eac import view_dirs
 from .writer import FrameWriter
 
 API = "https://graph.mapillary.com/images"
@@ -59,7 +63,13 @@ def fetch(bbox: str, out: Path, token: str | None = None, views: list[dict] | No
         raise SystemExit("no usable 360 sequences in this bbox — widen it or lower --min-seq-len")
 
     out.mkdir(parents=True, exist_ok=True)
-    writer = FrameWriter(out, projection="equirect", views=views)
+    # Mapillary serves stitched equirect, so the "equirect-360" profile is the
+    # honest description: one (fictional) optical centre, seam already baked in.
+    driver = get_driver(get_profile("equirect-360"))
+    plan = viewplan.plan_views(driver, {"views": views} if views else {})
+    dirs = [view_dirs(v["width"], v["height"], v["fov"], v["yaw"], v["pitch"])
+            for v in plan]
+    writer = FrameWriter(out, plan=plan, profile="equirect-360")
     kept = 0
     try:
         for seq in ranked:
@@ -87,7 +97,9 @@ def fetch(bbox: str, out: Path, token: str | None = None, views: list[dict] | No
                 if img is None:
                     continue
                 lon, lat = geom
-                writer.add(img, lat, lon, d.get("computed_altitude") or 0.0,
+                cams = [driver.sample(("view", k), dd, [img], plan[k]["lens"])
+                        for k, dd in enumerate(dirs)]
+                writer.add_views(cams, lat, lon, d.get("computed_altitude") or 0.0,
                            t=(d.get("captured_at", 0)) / 1000.0,
                            meta={"mapillary_id": d["id"], "sequence": d.get("sequence")})
                 kept += 1

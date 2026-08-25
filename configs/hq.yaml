@@ -1,26 +1,34 @@
-# Higher-quality capture profile. Costs roughly 3x the images (and training
-# time) of the default; use it per-chunk when a stretch matters, or for the
-# whole run when you have the GPUs.
+# Higher-quality capture profile for 360 driving footage.
 #
-# The two levers that actually move quality on 360 driving capture:
+# The three levers that actually move quality, in order of how much they moved
+# it on real capture:
 #
-# 1. ANGULAR RESOLUTION. Default 4 views x 100 deg at 1600 px is 16 px/degree,
-#    while 8K EAC faces hold ~21 px/deg -- we were throwing away a quarter of
-#    the detail the camera recorded. Six views x 80 deg at 1920 px is 24
-#    px/deg, so the virtual cameras stop being the bottleneck. The narrower
-#    FOV also means less extreme distortion at frame edges, which SIFT likes.
+# 1. ONE LENS PER IMAGE. The virtual cameras are planned inside each physical
+#    lens' cone (splatpipe/viewplan.py) instead of on a fixed yaw ring, so no
+#    training image straddles the lens boundary. The old ring put that boundary
+#    -- a real 3 cm change of viewpoint -- at yaw +-90, i.e. broadside, i.e. on
+#    the parked cars and house fronts closest to the camera. That is where the
+#    doubled truck and the half-missing roof came from. This costs nothing:
+#    three 80 deg views per lens is the same six images the ring produced.
 #
-# 2. VIEW OVERLAP AND SAMPLE DENSITY. Six views at 60 deg spacing overlap by
-#    20 deg (four at 90 deg spacing overlapped by 10), and 1.25 m frame
-#    spacing gives every surface more observations. Both constrain geometry
-#    that a single camera height leaves ambiguous -- the road crown, and
-#    houses seen through a narrow sweep as you pass.
+# 2. ANGULAR RESOLUTION. 8K EAC faces hold ~21 px/deg; 24 px/deg of virtual
+#    camera means the reframing is not the bottleneck. Below ~16 we were
+#    throwing away a quarter of the detail the camera recorded.
 #
-# What this CANNOT fix: everything still shares one optical centre, so there
-# is no vertical baseline. A second physical camera at a different height is
-# the real answer to road-surface ambiguity.
+# 3. SAMPLE DENSITY AND BOTH-DIRECTION COVERAGE. 1.25 m frame spacing plus a
+#    pass in each direction gives every surface more observations from more
+#    angles, which is what constrains geometry a single camera height leaves
+#    ambiguous.
+#
+# What this CANNOT fix: every lens still sits at one height on the roof. A
+# second physical camera lower down is the real answer to road-surface
+# ambiguity -- add it as its own `pinhole` ingest and merge at the chunk stage.
 ingest:
-  projection: equirect
+  # profile: gopro-max2      # uncomment to pin; otherwise auto-detected
+  fov: 80                    # per view, degrees -- 3 views/lens at this width
+  px_per_deg: 24
+  pitch: [-12]
+  view_overlap_deg: 12       # minimum overlap between adjacent views
   # Extract EVERY frame the camera shot (24 fps) even though we keep one per
   # 1.25 m. Two reasons. First, at 21.5 mph a 6 fps extract puts candidates
   # 1.60 m apart, so spacing_m never engages and the setting silently lies.
@@ -32,13 +40,6 @@ ingest:
   extract_fps: 24
   spacing_m: 1.25
   jpeg_quality: 96
-  views:
-    - {yaw: 0,   pitch: -12, fov: 80, width: 1920, height: 1440}
-    - {yaw: 60,  pitch: -12, fov: 80, width: 1920, height: 1440}
-    - {yaw: 120, pitch: -12, fov: 80, width: 1920, height: 1440}
-    - {yaw: 180, pitch: -12, fov: 80, width: 1920, height: 1440}
-    - {yaw: 240, pitch: -12, fov: 80, width: 1920, height: 1440}
-    - {yaw: 300, pitch: -12, fov: 80, width: 1920, height: 1440}
 
 chunk:
   cell_m: 150

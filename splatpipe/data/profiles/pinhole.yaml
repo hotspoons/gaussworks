@@ -1,0 +1,15 @@
+name: pinhole
+driver: flat
+telemetry: exif
+status: validated
+priority: 0
+match:
+  suffix: [".jpg", ".jpeg", ".png", ".mp4", ".mov"]
+  tracks: 1
+lenses:
+  - {name: main, axis: [0, 1, 0], half_fov_deg: 60.0}
+defaults:
+  px_per_deg: 20
+notes: |
+  Ordinary rectilinear camera -- a borrowed action cam bolted low on the
+  bumper, a phone, a drone. No reframing: frames pass through as-is.

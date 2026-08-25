@@ -19,29 +19,37 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .eac import EacSampler, equirect_dirs
-from .ingest import extract_candidates_360, video_fps
+from . import profiles
+from .drivers import get_driver
+from .eac import equirect_dirs
+from .ingest import extract_candidates_multi, video_fps
 
 
 def flatten(video: Path, out: Path | None = None, width: int = 4096,
             fps: float | None = None, start_s: float = 0.0,
             duration_s: float | None = None, hwaccel: str | None = None,
-            crf: int = 18) -> Path:
+            crf: int = 18, profile: str | None = None) -> Path:
     video = Path(video)
     out = Path(out or video.with_suffix(".equirect.mp4"))
     rate = fps or video_fps(video)
     height = width // 2
 
+    prof = profiles.detect(video, profile)
+    driver = get_driver(prof)
+    driver.prepare_sizes(profiles._streams(video))
+
     with tempfile.TemporaryDirectory(dir=out.parent) as td:
-        pairs = extract_candidates_360(video, Path(td), rate, hwaccel=hwaccel,
-                                       start_s=start_s, duration_s=duration_s)
+        pairs = extract_candidates_multi(video, Path(td), rate,
+                                         driver.ffmpeg_maps(), hwaccel=hwaccel,
+                                         start_s=start_s, duration_s=duration_s)
         if not pairs:
             raise SystemExit(f"{video}: no frames decoded")
-        first = cv2.imread(str(pairs[0][1]))
-        sampler = EacSampler(first.shape[1], first.shape[0])
         dirs = equirect_dirs(width)
-        print(f"[flatten] {len(pairs)} frames, EAC {first.shape[1]}x{first.shape[0]}"
+        print(f"[flatten] {len(pairs)} frames, {prof.name}"
               f" -> equirect {width}x{height} @ {rate:.2f} fps", flush=True)
+        # This is the VIEWING path, so blending the lens overlap is the right
+        # call here and only here -- see splatpipe/eac.py on why the same
+        # blend is wrong for anything that feeds reconstruction.
 
         proc = subprocess.Popen(
             ["ffmpeg", "-y", "-v", "error",
@@ -53,11 +61,11 @@ def flatten(video: Path, out: Path | None = None, width: int = 4096,
              # on the injected spherical box, see the note printed below
              "-metadata:s:v:0", "projection=equirectangular",
              str(out)], stdin=subprocess.PIPE)
-        for i, (_, p1, p2) in enumerate(pairs):
-            t1, t2 = cv2.imread(str(p1)), cv2.imread(str(p2))
-            if t1 is None or t2 is None:
+        for i, (_, paths) in enumerate(pairs):
+            frames = [cv2.imread(str(p)) for p in paths]
+            if any(f is None for f in frames):
                 continue
-            frame = sampler.sample(("equirect", width), dirs, t1, t2)
+            frame = driver.sample_sphere(("equirect", width), dirs, frames)
             proc.stdin.write(np.ascontiguousarray(frame).tobytes())
             if (i + 1) % 200 == 0:
                 print(f"[flatten]   {i + 1}/{len(pairs)}", flush=True)

@@ -30,7 +30,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .reframe import DEFAULT_VIEWS
 
 
 def seam_mask(view: dict, band_deg: float = 6.0) -> np.ndarray:
@@ -44,8 +43,10 @@ def seam_mask(view: dict, band_deg: float = 6.0) -> np.ndarray:
     virtual views are at fixed angles, the boundary lands on the SAME pixels in
     every frame, so a static mask removes the ambiguity for good.
 
-    Cheaper and more honest than pretending we can stitch: we drop the pixels
-    we cannot trust rather than blending two versions of the truth.
+    Only needed for PRE-STITCHED input, where the seam is already baked into
+    the pixels and dropping them is the best we can do. Raw-lens profiles do
+    not need it: ingest renders each view through a single lens and writes an
+    exact coverage mask, which `build` intersects in below.
     """
     from .eac import view_dirs                     # noqa: PLC0415
     d = view_dirs(view["width"], view["height"], view["fov"],
@@ -157,13 +158,14 @@ def vehicle_mask(paths: list[Path], shape: tuple[int, int], scale: int = 4,
 
 
 def build(frames_dir: Path, sample: int = 60, search_from: float = 0.35,
-          dark_pct: float = 45.0, seam_band_deg: float = 0.0,
-          views: list[dict] | None = None) -> Path:
+          dark_pct: float = 45.0, seam_band_deg: float = 0.0) -> Path:
     frames_dir = Path(frames_dir)
     images = frames_dir / "images"
     out = frames_dir / "masks"
     out.mkdir(exist_ok=True)
     report = {}
+    cams_json = frames_dir / "cameras.json"
+    specs = json.loads(cams_json.read_text()) if cams_json.exists() else []
 
     for cam in sorted(p for p in images.iterdir() if p.is_dir()):
         files = sorted(cam.glob("*.jpg"))
@@ -179,15 +181,23 @@ def build(frames_dir: Path, sample: int = 60, search_from: float = 0.35,
             continue
         mask = vehicle_mask(probe, (h, w), search_from=search_from,
                             dark_pct=dark_pct)
-        if seam_band_deg > 0:
-            specs = views or DEFAULT_VIEWS
-            k = int(cam.name.replace("cam", "")) if cam.name[3:].isdigit() else 0
-            if k < len(specs):
-                sm = seam_mask(specs[k], seam_band_deg)
-                if sm.shape != mask.shape:
-                    sm = cv2.resize(sm, (mask.shape[1], mask.shape[0]),
-                                    interpolation=cv2.INTER_NEAREST)
-                mask = np.minimum(mask, sm)
+        k = int(cam.name[3:]) if cam.name[3:].isdigit() else 0
+        # exact per-lens coverage, written by ingest: black where this camera's
+        # lens holds no pixels at all
+        cov_png = frames_dir / "coverage" / f"{cam.name}.png"
+        if cov_png.exists():
+            cov = cv2.imread(str(cov_png), cv2.IMREAD_GRAYSCALE)
+            if cov is not None:
+                if cov.shape != mask.shape:
+                    cov = cv2.resize(cov, (mask.shape[1], mask.shape[0]),
+                                     interpolation=cv2.INTER_NEAREST)
+                mask = np.minimum(mask, cov)
+        if seam_band_deg > 0 and k < len(specs):
+            sm = seam_mask(specs[k], seam_band_deg)
+            if sm.shape != mask.shape:
+                sm = cv2.resize(sm, (mask.shape[1], mask.shape[0]),
+                                interpolation=cv2.INTER_NEAREST)
+            mask = np.minimum(mask, sm)
         covered = float((mask == 0).mean())
 
         cam_out = out / cam.name
@@ -200,8 +210,8 @@ def build(frames_dir: Path, sample: int = 60, search_from: float = 0.35,
             if not link.exists():
                 os.symlink(shared.name, link)
         report[cam.name] = round(covered, 4)
-        print(f"[mask] {cam.name}: rig covers {covered:.1%} of frame "
-              f"({len(probe)} frames sampled)")
+        print(f"[mask] {cam.name}: {covered:.1%} of frame masked "
+              f"(rig + lens coverage, {len(probe)} frames sampled)")
 
     (out / "masks.json").write_text(json.dumps(
         {"masked_fraction": report, "search_from": search_from,

@@ -1,0 +1,29 @@
+name: insta360-x3
+driver: dual_fisheye
+telemetry: exif         # Insta360 writes GPS to a private box, not GPMF
+status: untested        # geometry is from published specs, not measured here
+priority: 10
+match:
+  suffix: [".insv", ".mp4"]
+  tracks: 1
+  track_size: [[5760, 2880]]
+geometry:
+  layout: side_by_side  # [ lens0 circle | lens1 circle ]
+  model: equidistant    # r = f * theta
+  circles:
+    - {cx: 1440.0, cy: 1440.0, radius: 1440.0, fov_deg: 193.0, roll_deg: 0.0}
+    - {cx: 4320.0, cy: 1440.0, radius: 1440.0, fov_deg: 193.0, roll_deg: 180.0}
+lenses:
+  - {name: front, axis: [0, 1, 0],  center_mm: [0,  11, 0]}
+  - {name: rear,  axis: [0, -1, 0], center_mm: [0, -11, 0]}
+defaults:
+  px_per_deg: 20
+  fov: 80
+  pitch: [-12]
+notes: |
+  UNTESTED -- written from the published sensor layout so the shape of the
+  support is real, not so the numbers are. Before relying on it, run
+  `splatpipe verify clip.insv` and fit `circles` to what you see: cx/cy/radius
+  are the parameters that actually matter, and roll_deg for the second lens
+  depends on how the camera was held. An .insv is an MP4 container; if ffprobe
+  refuses it, copy to .mp4 first.

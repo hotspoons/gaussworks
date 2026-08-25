@@ -53,13 +53,21 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     cams_path = chunk / "cameras.json"
     if cams_path.exists():
         cams = json.loads(cams_path.read_text())
-        # every synthesised view shares intrinsics, so one param string covers
-        # all folders; without this COLMAP guesses fx = 1.2*max(w,h)
         c = cams[0]
-        extract += ["--ImageReader.camera_params",
-                    f"{c['fx']:.6f},{c['fy']:.6f},{c['cx']:.6f},{c['cy']:.6f}"]
-        print(f"[poses] intrinsics from cameras.json: fx={c['fx']:.1f} "
-              f"cx={c['cx']:.1f} ({c['width']}x{c['height']}, {c['fov']} deg)")
+        key = ("fx", "fy", "cx", "cy", "width", "height")
+        # camera_params is a single string applied to every folder, so it is
+        # only safe when the view plan gave every camera the same intrinsics --
+        # which auto planning does. A hand-written mixed-FOV view list would
+        # silently get the first view's focal length imposed on all of them.
+        if all(tuple(x[k] for k in key) == tuple(c[k] for k in key) for x in cams):
+            extract += ["--ImageReader.camera_params",
+                        f"{c['fx']:.6f},{c['fy']:.6f},{c['cx']:.6f},{c['cy']:.6f}"]
+            print(f"[poses] intrinsics from cameras.json: fx={c['fx']:.1f} "
+                  f"cx={c['cx']:.1f} ({c['width']}x{c['height']}, {c['fov']} deg)")
+        else:
+            print("[poses] WARNING: cameras.json holds mixed intrinsics, so they "
+                  "cannot be pinned per folder; COLMAP will guess fx = 1.2*max(w,h) "
+                  "and registration will suffer. Use one FOV/size across views.")
     if (chunk / "masks").is_dir():
         # keeps features off the capture vehicle, which is rigid in the camera
         # frame and would otherwise drag every pose toward itself

@@ -1,0 +1,25 @@
+name: insta360-x4
+driver: dual_fisheye
+telemetry: exif
+status: untested
+priority: 10
+match:
+  suffix: [".insv", ".mp4"]
+  tracks: 1
+  track_size: [[7680, 3840]]
+geometry:
+  layout: side_by_side
+  model: equidistant
+  circles:
+    - {cx: 1920.0, cy: 1920.0, radius: 1920.0, fov_deg: 195.0, roll_deg: 0.0}
+    - {cx: 5760.0, cy: 1920.0, radius: 1920.0, fov_deg: 195.0, roll_deg: 180.0}
+lenses:
+  - {name: front, axis: [0, 1, 0],  center_mm: [0,  11, 0]}
+  - {name: rear,  axis: [0, -1, 0], center_mm: [0, -11, 0]}
+defaults:
+  px_per_deg: 22
+  fov: 80
+  pitch: [-12]
+notes: |
+  UNTESTED, same caveats as insta360-x3. X4/X5 store both lenses in one
+  stream at >= 5.7K; below that they may split across tracks.

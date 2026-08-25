@@ -1,7 +1,7 @@
 # Smoke test on the INRIA H3DGS toy dataset (just fetch-toy).
 # Flat (already-pinhole) images, no GPS -> sequential matching, no alignment.
 ingest:
-  projection: flat
+  profile: pinhole        # already-rectilinear stills: nothing to reproject
   spacing_m: 0            # keep every frame; toy images are pre-selected
 
 chunk:

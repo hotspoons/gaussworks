@@ -1,0 +1,23 @@
+name: equirect-360
+driver: equirect
+telemetry: exif
+status: validated
+priority: 5
+match:
+  suffix: [".mp4", ".mov", ".mkv", ".webm", ".jpg", ".jpeg", ".png"]
+  tracks: 1
+lenses:
+  # Already stitched: whatever the rig was, the file claims one optical centre.
+  # We take the claim at face value -- there is no way to undo a stitch -- and
+  # a single full-sphere lens is exactly that claim, written down.
+  - {name: sphere, axis: [0, 1, 0], half_fov_deg: 180.0}
+defaults:
+  px_per_deg: 16
+  fov: 100
+  pitch: [-10]
+notes: |
+  Pre-stitched equirectangular input (Mapillary, Insta360 Studio exports, any
+  360 player's output). Convenient, but the stitch has already averaged the
+  lens overlap into a single fictional viewpoint; expect seam-local ghosting
+  that no downstream stage can remove. Prefer a raw-lens profile when you have
+  the original file.

@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage 1: video -> geotagged, distance-spaced pinhole frames.
 
-- GPS comes from GoPro GPMF via exiftool (-ee); timestamps are taken relative
-  to the first GPS sample, which GoPro emits at recording start, so frame time
-  (idx / fps) maps onto the GPS timeline directly. Good to well under a meter
-  at driving speeds; RTK-grade sync can come later if it ever matters.
+Nothing in here knows what camera shot the footage. A profile
+(splatpipe/profiles.py) names a driver (splatpipe/drivers/) that turns ray
+directions into pixels, and a view plan (splatpipe/viewplan.py) decides which
+rays to ask for. Supporting a new 360 camera is a YAML file; supporting a new
+projection is one driver class. This stage only does the parts that are the
+same for every camera:
+
+- GPS comes from the video's telemetry via exiftool (-ee); timestamps are
+  taken relative to the first GPS sample, which cameras emit at recording
+  start, so frame time (idx / fps) maps onto the GPS timeline directly. Good
+  to well under a meter at driving speeds.
 - Candidate frames are extracted at extract_fps, then one frame is kept per
   spacing_m of travel: the sharpest (Laplacian variance) in each window.
 - Extraction runs in SEGMENTS. Candidates are full-resolution stills (a .360
@@ -13,13 +20,13 @@
   that to a minute of footage at a time, while distances come from the GPS
   track rather than the candidate list so selection is unaffected by where the
   segment boundaries fall.
-- .360 (GoPro EAC) is handled natively: both video tracks are extracted and
-  splatpipe.eac remaps EAC -> pinhole views in a single resample.
+- Each planned view is rendered THROUGH ONE LENS. Where that lens has no data
+  the pixels are black and the coverage mask says so; nothing is ever
+  cross-faded from a second lens into a training image.
 """
 
 import datetime as dt
 import json
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -27,9 +34,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .eac import EacSampler, view_dirs
+from . import profiles, viewplan
+from .drivers import get_driver
+from .eac import view_dirs
 from .geo import ll_to_enu, track_distances
-from .reframe import DEFAULT_VIEWS
 from .writer import FrameWriter
 
 
@@ -57,7 +65,11 @@ def _parse_gps_time(ts: str) -> float:
 
 
 def extract_telemetry(video: Path) -> list[dict]:
-    """GPMF GPS track as [{t, lat, lon, alt}], t relative to the first sample."""
+    """GPS track as [{t, lat, lon, alt}], t relative to the first sample.
+
+    exiftool reads GoPro GPMF and Insta360's boxes through the same -ee pass,
+    so the profile's `telemetry` field only decides whether to look at all.
+    """
     rec = _run_json(["exiftool", "-ee", "-n", "-j", "-G3",
                      "-api", "LargeFileSupport=1", str(video)])[0]
     docs: dict[int, dict] = {}
@@ -121,17 +133,19 @@ def extract_candidates(video: Path, tmp: Path, extract_fps: float,
     return [(start_s + (i + 0.5) / extract_fps, p) for i, p in enumerate(paths)]
 
 
-def extract_candidates_360(video: Path, tmp: Path, extract_fps: float,
-                           hwaccel: str | None = None, start_s: float = 0.0,
-                           duration_s: float | None = None
-                           ) -> list[tuple[float, Path, Path]]:
-    """GoPro .360: dump matching frame pairs from both EAC video tracks."""
+def extract_candidates_multi(video: Path, tmp: Path, extract_fps: float,
+                             maps: list[str | None], hwaccel: str | None = None,
+                             start_s: float = 0.0, duration_s: float | None = None
+                             ) -> list[tuple[float, list[Path]]]:
+    """Dump matching frames from every stream the driver asked for."""
     kw = dict(hwaccel=hwaccel, start_s=start_s, duration_s=duration_s)
-    t1 = extract_candidates(video, tmp / "t1", extract_fps, stream="0:v:0", **kw)
-    t2 = extract_candidates(video, tmp / "t2", extract_fps, stream="0:v:1", **kw)
-    if len(t1) != len(t2):
-        print(f"[ingest] warning: track frame counts differ ({len(t1)} vs {len(t2)})")
-    return [(t, p1, p2) for (t, p1), (_, p2) in zip(t1, t2)]
+    per_stream = [extract_candidates(video, tmp / f"s{i}", extract_fps, stream=m, **kw)
+                  for i, m in enumerate(maps)]
+    n = min(len(s) for s in per_stream)
+    if any(len(s) != n for s in per_stream):
+        print(f"[ingest] warning: stream frame counts differ "
+              f"({[len(s) for s in per_stream]}), truncating to {n}")
+    return [(per_stream[0][i][0], [s[i][1] for s in per_stream]) for i in range(n)]
 
 
 def sharpness(path: Path) -> float:
@@ -144,24 +158,53 @@ def sharpness(path: Path) -> float:
     return float(cv2.Laplacian(img, cv2.CV_64F).var())
 
 
-def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
-                  views: list[dict] | None = None, extract_fps: float = 6.0,
+def _resolve(video: Path, hint: str | None, view_cfg: dict):
+    prof = profiles.detect(video, hint)
+    driver = get_driver(prof)
+    driver.prepare_sizes(profiles._streams(video))
+    plan = viewplan.plan_views(driver, view_cfg) if driver.reframes else []
+    if plan:
+        print(viewplan.describe(plan))
+    return prof, driver, plan
+
+
+def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None,
+                  view_cfg: dict | None = None, profile: str | None = None,
+                  extract_fps: float = 6.0,
                   spacing_m: float = 1.75, jpeg_quality: int = 95,
                   hwaccel: str | None = None, start_s: float = 0.0,
                   duration_s: float | None = None,
                   near: tuple[float, float] | None = None,
                   radius_m: float = 400.0, segment_s: float = 60.0) -> Path:
     out.mkdir(parents=True, exist_ok=True)
-    is_360 = any(v.suffix.lower() == ".360" for v in videos)
-    writer = FrameWriter(out, projection="eac" if is_360 else projection,
-                         views=views, jpeg_quality=jpeg_quality)
-    eac_sampler = None
-    eac_dirs = None
-    view_specs = views or DEFAULT_VIEWS
+    view_cfg = dict(view_cfg or {})
+    if views:
+        view_cfg["views"] = views
+
+    prof, driver, plan = _resolve(videos[0], profile, view_cfg)
+    dirs = [view_dirs(v["width"], v["height"], v["fov"], v["yaw"], v["pitch"])
+            for v in plan]
+    coverage = [driver.coverage(("view", k), d, plan[k]["lens"])
+                for k, d in enumerate(dirs)]
+    for k, v in enumerate(plan):
+        frac = float(np.mean(coverage[k]))
+        if frac < 0.999:
+            print(f"[ingest] cam{k} ({v['lens_name']} yaw={v['yaw']:g}) "
+                  f"covers {frac:.1%} of its frame; the rest is masked")
+    writer = FrameWriter(out, plan=plan, jpeg_quality=jpeg_quality,
+                         profile=prof.name, coverage=coverage if plan else None)
+
     try:
         for video in videos:
-            native_360 = video.suffix.lower() == ".360"
-            gps = extract_telemetry(video)
+            if video is not videos[0]:
+                other, _, other_plan = _resolve(video, profile, view_cfg)
+                if other.name != prof.name or other_plan != plan:
+                    raise SystemExit(
+                        f"[ingest] {video.name} resolves to profile "
+                        f"{other.name!r} but {videos[0].name} resolved to "
+                        f"{prof.name!r}. Ingest one camera at a time and merge "
+                        f"at the chunk stage, where mixed rigs belong.")
+            gps = extract_telemetry(video) if prof.telemetry != "none" else []
             if gps:
                 gt = np.array([p["t"] for p in gps])
                 glat = np.array([p["lat"] for p in gps])
@@ -172,24 +215,18 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                 # shift the selection
                 gdist = np.array(track_distances(list(glat), list(glon)))
             centre = (near[0], near[1], 0.0) if near else None
+            maps = driver.ffmpeg_maps()
 
             end_s = start_s + duration_s if duration_s else video_duration(video)
             next_d, kept_here, seen_here = 0.0, 0, 0
-            seg = seg_start = start_s
+            seg_start = start_s
             while seg_start < end_s - 1e-3:
                 seg_len = min(segment_s, end_s - seg_start)
                 with tempfile.TemporaryDirectory(dir=out, prefix=".cand-") as td:
-                    if native_360:
-                        pairs = extract_candidates_360(video, Path(td), extract_fps,
-                                                       hwaccel=hwaccel,
-                                                       start_s=seg_start,
-                                                       duration_s=seg_len)
-                        cands = [(t, p1) for t, p1, _ in pairs]
-                    else:
-                        pairs = None
-                        cands = extract_candidates(video, Path(td), extract_fps,
-                                                   hwaccel=hwaccel, start_s=seg_start,
-                                                   duration_s=seg_len)
+                    cands = extract_candidates_multi(video, Path(td), extract_fps,
+                                                     maps, hwaccel=hwaccel,
+                                                     start_s=seg_start,
+                                                     duration_s=seg_len)
                     seen_here += len(cands)
                     if not cands:
                         seg_start += seg_len
@@ -213,7 +250,7 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                             window.append(i)
                             if dist[i] >= next_d:
                                 keep.append(max(window,
-                                                key=lambda j: sharpness(cands[j][1])))
+                                                key=lambda j: sharpness(cands[j][1][0])))
                                 window, next_d = [], dist[i] + spacing_m
 
                     if centre is not None and gps:
@@ -223,26 +260,18 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
                                 <= radius_m * radius_m]
 
                     for i in keep:
-                        t, path = cands[i]
-                        img = cv2.imread(str(path))
-                        if img is None:
+                        t, paths = cands[i]
+                        frames = [cv2.imread(str(p)) for p in paths]
+                        if any(f is None for f in frames):
                             continue
-                        if native_360:
-                            img2 = cv2.imread(str(pairs[i][2]))
-                            if img2 is None:
-                                continue
-                            if eac_sampler is None:
-                                eac_sampler = EacSampler(img.shape[1], img.shape[0])
-                                eac_dirs = [view_dirs(v["width"], v["height"],
-                                                      v["fov"], v["yaw"], v["pitch"])
-                                            for v in view_specs]
-                            cams = [eac_sampler.sample(("view", k), d, img, img2)
-                                    for k, d in enumerate(eac_dirs)]
-                            writer.add_views(cams, lat[i], lon[i], alt[i], t=t,
-                                             meta={"video": video.name})
+                        if plan:
+                            cams = [driver.sample(("view", k), d, frames,
+                                                  plan[k]["lens"])
+                                    for k, d in enumerate(dirs)]
                         else:
-                            writer.add(img, lat[i], lon[i], alt[i], t=t,
-                                       meta={"video": video.name})
+                            cams = [frames[0]]
+                        writer.add_views(cams, lat[i], lon[i], alt[i], t=t,
+                                         meta={"video": video.name})
                         kept_here += 1
                 seg_start += seg_len
                 print(f"[ingest] {video.name}: {seg_start - start_s:6.0f}s / "
@@ -257,7 +286,7 @@ def ingest_videos(videos: list[Path], out: Path, projection: str = "equirect",
 def ingest_images(images: list[Path], out: Path) -> Path:
     """Flat, pre-framed images (toy datasets, borrowed front cam) -> layout."""
     out.mkdir(parents=True, exist_ok=True)
-    writer = FrameWriter(out, projection="flat")
+    writer = FrameWriter(out)
     try:
         for path in images:
             img = cv2.imread(str(path))

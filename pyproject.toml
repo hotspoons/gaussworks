@@ -21,3 +21,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["splatpipe"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"splatpipe/data/profiles" = "splatpipe/data/profiles"

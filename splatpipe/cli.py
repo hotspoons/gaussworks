@@ -22,7 +22,10 @@ def main():
     s = sub.add_parser("ingest", help="video(s) -> geotagged pinhole frames")
     s.add_argument("videos", nargs="+", type=Path)
     s.add_argument("--out", required=True, type=Path)
-    s.add_argument("--projection", choices=["equirect", "flat"])
+    s.add_argument("--profile", help="camera profile name (default: auto-detect)")
+    s.add_argument("--fov", type=float, help="virtual view FOV, degrees")
+    s.add_argument("--px-per-deg", type=float, help="angular resolution of the views")
+    s.add_argument("--pitch", help="comma-separated view pitches, degrees (down = negative)")
     s.add_argument("--extract-fps", type=float)
     s.add_argument("--spacing-m", type=float)
     s.add_argument("--hwaccel", help="ffmpeg decoder, e.g. cuda (8K HEVC is decode-bound)")
@@ -45,11 +48,9 @@ def main():
     s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
     s.add_argument("--min-frames", type=int, help="cells with fewer own frames are dropped")
 
-    s = sub.add_parser("align", help="estimate the .360 lens-to-lens rotation")
-    s.add_argument("video", type=Path)
-    s.add_argument("--out", type=Path)
-    s.add_argument("--at", type=float, default=120.0)
-    s.add_argument("--frames", type=int, default=3)
+    s = sub.add_parser("profiles", help="list camera profiles, or detect one for a file")
+    s.add_argument("video", nargs="?", type=Path)
+    s.add_argument("--plan", action="store_true", help="also show the view plan")
 
     s = sub.add_parser("flatten", help=".360 -> equirectangular mp4 for any 360 player")
     s.add_argument("video", type=Path)
@@ -59,6 +60,7 @@ def main():
     s.add_argument("--start-s", type=float, default=0.0)
     s.add_argument("--duration-s", type=float)
     s.add_argument("--hwaccel", help="e.g. cuda")
+    s.add_argument("--profile")
 
     s = sub.add_parser("mask", help="auto-mask the capture vehicle out of every frame")
     s.add_argument("--frames", required=True, type=Path)
@@ -68,7 +70,9 @@ def main():
     s.add_argument("--dark-pct", type=float, default=45.0,
                    help="percentile of median luminance treated as rig")
     s.add_argument("--seam-band-deg", type=float, default=0.0,
-                   help="also mask this many degrees either side of the lens seam")
+                   help="pre-stitched input only: mask this many degrees either "
+                        "side of the seam. Raw-lens profiles never need it -- "
+                        "ingest writes exact per-lens coverage masks instead.")
 
     s = sub.add_parser("status", help="queue state across chunks (pending/running/done/failed)")
     s.add_argument("--chunks", required=True, type=Path)
@@ -90,6 +94,7 @@ def main():
     s.add_argument("video", type=Path)
     s.add_argument("--out", type=Path, default=Path("data/verify"))
     s.add_argument("--at", type=float, default=5.0, help="seconds into the clip")
+    s.add_argument("--profile", help="camera profile name (default: auto-detect)")
 
     s = sub.add_parser("eval", help="compare checkpoints on visible (unmasked) pixels")
     s.add_argument("--chunk", required=True, type=Path)
@@ -157,10 +162,19 @@ def main():
     if args.cmd == "ingest":
         from .ingest import ingest_videos
         cfg = _cfg(args.config, "ingest")
+        view_cfg = {k: v for k, v in cfg.items()
+                    if k in ("fov", "px_per_deg", "pitch", "aspect",
+                             "view_overlap_deg", "min_coverage")}
+        if args.fov:
+            view_cfg["fov"] = args.fov
+        if args.px_per_deg:
+            view_cfg["px_per_deg"] = args.px_per_deg
+        if args.pitch:
+            view_cfg["pitch"] = [float(x) for x in args.pitch.split(",")]
         ingest_videos(
             args.videos, args.out,
-            projection=args.projection or cfg.get("projection", "equirect"),
-            views=cfg.get("views"),
+            profile=args.profile or cfg.get("profile"),
+            views=cfg.get("views"), view_cfg=view_cfg,
             extract_fps=args.extract_fps or cfg.get("extract_fps", 6.0),
             spacing_m=args.spacing_m if args.spacing_m is not None
             else cfg.get("spacing_m", 1.75),
@@ -188,21 +202,35 @@ def main():
                     else cfg.get("min_frames", 20),
                     corridor_cfg=_cfg(args.config, "corridor"))
 
-    elif args.cmd == "align":
-        from .eac_align import calibrate
-        calibrate(args.video, args.out, at_s=args.at, frames=args.frames)
+    elif args.cmd == "profiles":
+        from . import profiles as P
+        from . import viewplan
+        from .drivers import get_driver
+        if args.video:
+            prof = P.detect(args.video)
+        else:
+            for name, pr in sorted(P.all_profiles().items()):
+                lenses = ", ".join(f"{l.name}@{l.yaw_deg:+.0f}" for l in pr.lenses)
+                print(f"{name:22s} {pr.driver:14s} {pr.status:10s} "
+                      f"telemetry={pr.telemetry:8s} lenses: {lenses}")
+                for line in (pr.match.get("track_size") or []):
+                    print(f"{'':22s}   matches {line[0]}x{line[1]}")
+            return
+        if args.plan:
+            d = get_driver(prof)
+            d.prepare_sizes(P._streams(args.video))
+            print(viewplan.describe(viewplan.plan_views(d, _cfg(args.config, "ingest"))))
 
     elif args.cmd == "flatten":
         from .flatten import flatten
         flatten(args.video, args.out, width=args.width, fps=args.fps,
                 start_s=args.start_s, duration_s=args.duration_s,
-                hwaccel=args.hwaccel)
+                hwaccel=args.hwaccel, profile=args.profile)
 
     elif args.cmd == "mask":
         from .mask import build
         build(args.frames, sample=args.sample, search_from=args.search_from,
-              dark_pct=args.dark_pct, seam_band_deg=args.seam_band_deg,
-              views=_cfg(args.config, "ingest").get("views"))
+              dark_pct=args.dark_pct, seam_band_deg=args.seam_band_deg)
 
     elif args.cmd == "status":
         from .poses import list_chunks
@@ -229,7 +257,8 @@ def main():
 
     elif args.cmd == "verify":
         from .verify import verify
-        verify(args.video, args.out, at_s=args.at)
+        verify(args.video, args.out, at_s=args.at, profile=args.profile,
+               view_cfg=_cfg(args.config, "ingest"))
 
     elif args.cmd == "eval":
         from .evaluate import evaluate

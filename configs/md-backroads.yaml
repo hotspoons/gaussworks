@@ -26,15 +26,15 @@ campaign:
   # shutter locked >= 1/1000s, stabilization OFF, roof rig on the Rivian.
 
 ingest:
-  projection: equirect      # Max 2 via EAC->equirect (ingest .360 path TBD)
+  # Camera is auto-detected from the file (see `splatpipe profiles`); the view
+  # plan is then laid out inside each lens' cone, so no training image crosses
+  # the lens boundary. Survey settings: wider/cheaper than configs/hq.yaml.
+  fov: 90
+  px_per_deg: 18
+  pitch: [-10]
   extract_fps: 6            # candidates; final pick is distance-based
   spacing_m: 1.75           # one kept frame per ~1.75m of travel
   jpeg_quality: 95
-  views:                    # equirect -> virtual pinholes (yaw, pitch, fov, w, h)
-    - {yaw: 0,    pitch: -10, fov: 100, width: 1600, height: 1200}
-    - {yaw: 90,   pitch: -10, fov: 100, width: 1600, height: 1200}
-    - {yaw: 180,  pitch: -10, fov: 100, width: 1600, height: 1200}
-    - {yaw: 270,  pitch: -10, fov: 100, width: 1600, height: 1200}
 
 chunk:
   # locality grid: every pass through a cell feeds that cell's chunk

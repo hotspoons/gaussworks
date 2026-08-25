@@ -1,0 +1,20 @@
+name: gopro-360-generic
+driver: gopro_eac
+telemetry: gpmf
+status: derived         # geometry inferred from the track size, unverified
+priority: 1             # only used when no exact-resolution profile matches
+match:
+  suffix: [".360"]
+  tracks: 2
+geometry:
+  blend_px: null        # fall back to side - face, then eyeball with `verify`
+lenses:
+  - {name: front, axis: [0, 1, 0],  center_mm: [0,  15, 0]}
+  - {name: rear,  axis: [0, -1, 0], center_mm: [0, -15, 0]}
+defaults:
+  px_per_deg: 20
+  fov: 80
+  pitch: [-12]
+notes: |
+  Catch-all for an unrecognised .360. Run `splatpipe verify <clip>` and look at
+  the equirect before trusting a run made through this profile.

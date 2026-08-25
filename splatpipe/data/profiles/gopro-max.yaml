@@ -1,0 +1,24 @@
+name: gopro-max
+driver: gopro_eac
+telemetry: gpmf
+status: validated
+priority: 10
+match:
+  suffix: [".360"]
+  tracks: 2
+  track_size: [[4096, 1344], [2272, 736]]
+geometry:
+  blend_px: null        # derived per track size: {4096x1344: 32, 2272x736: 16}
+  blend_px_by_track:
+    "4096x1344": 32
+    "2272x736": 16
+lenses:
+  - {name: front, axis: [0, 1, 0],  center_mm: [0,  15, 0]}
+  - {name: rear,  axis: [0, -1, 0], center_mm: [0, -15, 0]}
+defaults:
+  px_per_deg: 21
+  fov: 80
+  pitch: [-12]
+notes: |
+  First-generation MAX. 5.6K (4096x1344) and the 3K proxy (2272x736) share the
+  layout with different blend widths.
