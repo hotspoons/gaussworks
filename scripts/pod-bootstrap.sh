@@ -34,7 +34,23 @@ if ls /workspace/wheels/*.whl >/dev/null 2>&1; then
 fi
 pip install -q -e /workspace/gaussworks
 
-echo 'export PATH=/workspace/opt/sfm/bin:$PATH' >> ~/.bashrc
+
+# ExifTool: the distro package is too old. GoPro switched the GPMF GPS payload
+# from GPS5 to GPS9 with the HERO11 generation (the MAX 2 writes GPS9), and an
+# exiftool without GPS9 support parses the file, reports every other stream,
+# and silently returns no GPS -- which downstream is indistinguishable from a
+# camera that never got a fix. Ubuntu 24.04 ships 12.76; we need 12.90+.
+EXIFTOOL_VERSION=13.44
+if [ ! -x /workspace/opt/exiftool/exiftool ]; then
+    mkdir -p /workspace/opt && cd /workspace/opt
+    curl -fsSL -o et.tgz "https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz"
+    rm -rf exiftool Image-ExifTool-* && tar xzf et.tgz && rm et.tgz
+    mv "Image-ExifTool-${EXIFTOOL_VERSION}" exiftool
+fi
+
+echo 'export PATH=/workspace/opt/exiftool:/workspace/opt/sfm/bin:$PATH' >> ~/.bashrc
 echo 'source /workspace/venv/bin/activate' >> ~/.bashrc
 echo 'export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions' >> ~/.bashrc
-echo "[pod-bootstrap] done — colmap: $(command -v colmap || echo MISSING), venv active"
+export PATH=/workspace/opt/exiftool:/workspace/opt/sfm/bin:$PATH
+echo "[pod-bootstrap] done — colmap: $(command -v colmap || echo MISSING), \
+exiftool: $(exiftool -ver 2>/dev/null || echo MISSING), venv active"

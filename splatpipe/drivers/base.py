@@ -28,6 +28,7 @@ class Driver(ABC):
     def __init__(self, profile: CameraProfile):
         self.profile = profile
         self._ready = False
+        self._cov_cache: dict = {}
 
     # -- container -------------------------------------------------------
     def ffmpeg_maps(self) -> list[str | None]:
@@ -68,8 +69,20 @@ class Driver(ABC):
         """Resample `frames` along `dirs` using ONE lens. Uncovered -> black."""
 
     @abstractmethod
+    def covers(self, dirs: np.ndarray, lens: int) -> np.ndarray:
+        """Bool mask, same shape as `dirs[...,0]`: does `lens` see this ray?
+
+        The EXACT answer, computed from the projection rather than approximated
+        by a cone around the lens axis -- a cube-face layout's lens boundary is
+        not a cone, and view planning needs to know precisely where it is.
+        """
+
     def coverage(self, key, dirs: np.ndarray, lens: int) -> np.ndarray:
-        """Bool mask, same shape as `dirs[...,0]`: does `lens` see this ray?"""
+        """`covers`, memoised per (key, lens) for full-resolution view grids."""
+        ck = (key, lens)
+        if ck not in self._cov_cache:
+            self._cov_cache[ck] = self.covers(dirs, lens)
+        return self._cov_cache[ck]
 
     def sample_sphere(self, key, dirs: np.ndarray,
                       frames: list[np.ndarray]) -> np.ndarray:

@@ -22,6 +22,8 @@ with f set so that theta = fov/2 lands exactly on `radius`.
 
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 
@@ -92,8 +94,10 @@ class DualFisheyeDriver(Driver):
                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         return np.where(valid[..., None], img, 0).astype(np.uint8)
 
-    def coverage(self, key, dirs, lens):
-        return self._grid(key, dirs, lens)[2]
+    def covers(self, dirs, lens):
+        axis = self.lenses[lens].axis_np
+        half = math.radians(float(self.circles[lens]["fov_deg"]) / 2.0)
+        return np.arccos(np.clip(dirs @ axis, -1.0, 1.0)) <= half
 
     def sample_sphere(self, key, dirs, frames):
         """Nearest-lens composite. Deliberately NOT feathered: a hard edge is

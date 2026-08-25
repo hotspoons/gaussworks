@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..eac import EacSampler
+from ..eac import EacSampler, eac_maps
 from .base import Driver
 
 
@@ -46,8 +46,8 @@ class GoProEacDriver(Driver):
     def sample(self, key, dirs, frames, lens):
         return self.sampler.sample(key, dirs, frames[0], frames[1], lens=lens)
 
-    def coverage(self, key, dirs, lens):
-        return self.sampler.coverage(key, dirs, lens)
+    def covers(self, dirs, lens):
+        return eac_maps(dirs, self.sampler.tpl, lens=lens).valid
 
     def sample_sphere(self, key, dirs, frames):
         return self.sampler.sample(key, dirs, frames[0], frames[1], lens=None)

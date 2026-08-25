@@ -18,5 +18,5 @@ class FlatDriver(Driver):
     def sample(self, key, dirs, frames, lens):
         return frames[0]
 
-    def coverage(self, key, dirs, lens):
+    def covers(self, dirs, lens):
         return np.ones(dirs.shape[:-1], bool)

@@ -35,5 +35,5 @@ class EquirectDriver(Driver):
         mx, my = self._grid(key, dirs, img.shape[:2])
         return cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
 
-    def coverage(self, key, dirs, lens):
+    def covers(self, dirs, lens):
         return np.ones(dirs.shape[:-1], bool)

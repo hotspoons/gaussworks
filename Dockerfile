@@ -52,7 +52,8 @@ ARG CUDA_ARCHS=80;89;90;120
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
-# ffmpeg: frame extraction + v360; exiftool: GPMF GPS from GoPro files.
+# ffmpeg: frame extraction; exiftool: GPMF GPS from GoPro files -- but see the
+# version note below, the packaged one is only here for its Perl dependencies.
 # The -dev boost/ceres packages are the lazy way to satisfy the copied
 # binaries' shared libs; fine for a dev image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -61,6 +62,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreeimage-dev libmetis-dev libgoogle-glog-dev libgflags-dev \
     libceres-dev libflann-dev libsuitesparse-dev libglew-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# ExifTool from upstream, NOT the distro package. GoPro moved the GPMF GPS
+# payload from GPS5 to GPS9 with the HERO11 generation, and the MAX 2 writes
+# GPS9. An exiftool without GPS9 support parses the file, reports every other
+# telemetry stream, and returns no GPS -- which downstream is indistinguishable
+# from a camera that never got a fix, and quietly disables geo alignment,
+# locality chunking and distance-based frame spacing. Ubuntu 24.04 ships 12.76.
+ARG EXIFTOOL_VERSION=13.44
+RUN curl -fsSL "https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz" \
+      | tar xz -C /opt \
+    && mv "/opt/Image-ExifTool-${EXIFTOOL_VERSION}" /opt/exiftool \
+    && ln -sf /opt/exiftool/exiftool /usr/local/bin/exiftool \
+    && exiftool -ver
 
 COPY --from=sfm-builder /opt/sfm /opt/sfm
 ENV PATH=/opt/sfm/bin:${PATH}

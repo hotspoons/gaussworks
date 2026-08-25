@@ -24,7 +24,7 @@ import numpy as np
 from . import profiles, viewplan
 from .drivers import get_driver
 from .eac import equirect_dirs, view_dirs
-from .ingest import extract_candidates_multi, extract_telemetry
+from .ingest import EXIFTOOL, exiftool_version, extract_candidates_multi, extract_telemetry
 
 
 def _streams(video: Path) -> list[dict]:
@@ -80,6 +80,11 @@ def verify(video: Path, out: Path, at_s: float = 5.0,
         print(f"[verify] NOTE: profile status is {prof.status!r} -- the previews "
               f"below are what tells you whether its geometry is right.")
 
+    ver = exiftool_version()
+    print(f"[verify] {EXIFTOOL} {ver:g}"
+          + ("  <-- too old for GoPro GPS9 (HERO11+/MAX 2); it will report no "
+             "GPS on files that have it. Install 12.90+ or set $EXIFTOOL."
+             if 0 < ver < 12.90 else ""))
     gps = extract_telemetry(video) if prof.telemetry != "none" else []
     if gps:
         print(f"[verify] GPS: {len(gps)} samples, first "
@@ -128,7 +133,7 @@ def verify(video: Path, out: Path, at_s: float = 5.0,
               f"{float(np.abs(a - b)[both].mean()):.1f}/255")
 
     plan = viewplan.plan_views(driver, view_cfg or {})
-    print(viewplan.describe(plan))
+    print(viewplan.describe(plan, driver))
     for k, v in enumerate(plan):
         d = view_dirs(v["width"], v["height"], v["fov"], v["yaw"], v["pitch"])
         cov = float(driver.coverage(("view", k), d, v["lens"]).mean())

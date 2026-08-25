@@ -27,6 +27,7 @@ same for every camera:
 
 import datetime as dt
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -64,27 +65,58 @@ def _parse_gps_time(ts: str) -> float:
     return dt.datetime.strptime(ts, fmt).timestamp()
 
 
+EXIFTOOL = os.environ.get("EXIFTOOL", "exiftool")
+
+
+def exiftool_version() -> float:
+    try:
+        out = subprocess.run([EXIFTOOL, "-ver"], check=True,
+                             capture_output=True).stdout.decode().strip()
+        return float(out)
+    except Exception:
+        return 0.0
+
+
+def _doc_key(group: str):
+    """'Doc12' or 'Doc1-7' -> a sortable tuple. GPS9 payloads nest."""
+    return tuple(int(x) for x in group[3:].split("-") if x.isdigit())
+
+
 def extract_telemetry(video: Path) -> list[dict]:
     """GPS track as [{t, lat, lon, alt}], t relative to the first sample.
 
     exiftool reads GoPro GPMF and Insta360's boxes through the same -ee pass,
     so the profile's `telemetry` field only decides whether to look at all.
+
+    EXIFTOOL VERSION MATTERS. GoPro moved from the GPS5 payload to GPS9 with
+    the HERO11 generation, and the MAX 2 writes GPS9. An exiftool without GPS9
+    support -- including the 12.76 that Ubuntu 24.04 ships -- parses the file
+    happily, reports every other GPMF stream, and returns NO GPS AT ALL. That
+    failure is silent and downstream it looks like a camera with GPS switched
+    off: no geo alignment, no locality chunking, and distance-based frame
+    spacing quietly degrades to "keep everything". Set $EXIFTOOL or install
+    12.90+; `verify` checks and says so.
     """
-    rec = _run_json(["exiftool", "-ee", "-n", "-j", "-G3",
+    rec = _run_json([EXIFTOOL, "-ee", "-n", "-j", "-G3",
                      "-api", "LargeFileSupport=1", str(video)])[0]
-    docs: dict[int, dict] = {}
+    docs: dict[tuple, dict] = {}
     for key, val in rec.items():
         if ":" not in key:
             continue
         group, tag = key.split(":", 1)
         if group.startswith("Doc"):
-            docs.setdefault(int(group[3:]), {})[tag] = val
+            docs.setdefault(_doc_key(group), {})[tag] = val
     pts = []
     for i in sorted(docs):
         d = docs[i]
         if "GPSLatitude" in d and "GPSLongitude" in d:
             pts.append(d)
     if not pts:
+        ver = exiftool_version()
+        if ver and ver < 12.90:
+            print(f"[ingest] no GPS found, and {EXIFTOOL} is {ver:g} -- too old "
+                  f"for GoPro GPS9 (HERO11+/MAX 2). This is almost certainly the "
+                  f"reason, not the camera. Install 12.90+ or set $EXIFTOOL.")
         return []
     timed = [p for p in pts if "GPSDateTime" in p]
     if timed:
@@ -164,7 +196,7 @@ def _resolve(video: Path, hint: str | None, view_cfg: dict):
     driver.prepare_sizes(profiles._streams(video))
     plan = viewplan.plan_views(driver, view_cfg) if driver.reframes else []
     if plan:
-        print(viewplan.describe(plan))
+        print(viewplan.describe(plan, driver))
     return prof, driver, plan
 
 
@@ -175,7 +207,8 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                   hwaccel: str | None = None, start_s: float = 0.0,
                   duration_s: float | None = None,
                   near: tuple[float, float] | None = None,
-                  radius_m: float = 400.0, segment_s: float = 60.0) -> Path:
+                  radius_m: float = 400.0, segment_s: float = 60.0,
+                  no_telemetry: bool = False) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     view_cfg = dict(view_cfg or {})
     if views:
@@ -204,7 +237,25 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                         f"{other.name!r} but {videos[0].name} resolved to "
                         f"{prof.name!r}. Ingest one camera at a time and merge "
                         f"at the chunk stage, where mixed rigs belong.")
-            gps = extract_telemetry(video) if prof.telemetry != "none" else []
+            want_gps = prof.telemetry != "none" and not no_telemetry
+            gps = extract_telemetry(video) if want_gps else []
+            if not gps and want_gps:
+                # Silently continuing here is how a run wastes hours: with no
+                # track there is no distance, so spacing_m never engages and
+                # --near cannot filter, and you get every extracted frame of
+                # the whole clip instead of the stretch you asked for.
+                detail = []
+                if spacing_m > 0:
+                    detail.append(f"--spacing-m {spacing_m} would keep EVERY "
+                                  f"frame ({extract_fps} fps)")
+                if near:
+                    detail.append("--near/--radius-m cannot filter anything")
+                raise SystemExit(
+                    f"[ingest] {video.name}: profile {prof.name!r} expects "
+                    f"{prof.telemetry} telemetry and none was found"
+                    + (" -- " + "; ".join(detail) if detail else "")
+                    + f".\n  Check with: splatpipe verify {video}\n"
+                    f"  To ingest anyway, use --spacing-m 0 --no-telemetry.")
             if gps:
                 gt = np.array([p["t"] for p in gps])
                 glat = np.array([p["lat"] for p in gps])

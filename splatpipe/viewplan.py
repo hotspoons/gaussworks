@@ -51,23 +51,48 @@ def _covered_fraction(driver, lens: int, yaw: float, pitch: float, fov: float,
                       aspect: float) -> float:
     w, h = _PROBE
     dirs = view_dirs(w, _even(w * aspect), fov, yaw, pitch)
-    axis = driver.lenses[lens].axis_np
-    cos_lim = math.cos(math.radians(driver.usable_half_fov_deg(lens)))
-    return float((dirs @ axis >= cos_lim).mean())
+    return float(driver.covers(dirs, lens).mean())
 
 
-def _max_offset(driver, lens: int, pitch: float, fov: float, aspect: float,
-                need: float = 0.999) -> float:
+def _corner_dirs(fov: float, aspect: float, yaw: float, pitch: float) -> np.ndarray:
+    """The four extreme rays of a rectilinear view, in the rig frame.
+
+    A pinhole view's furthest ray from its own axis is always a corner, so
+    testing four rays is exact -- and a sampled grid is not: its outermost
+    samples sit inside the true corners, which is how a 'fully covered' plan
+    still clipped 0.4% of the frame.
+    """
+    t = math.tan(math.radians(fov) / 2.0)
+    d = np.array([[sx * t, 1.0, -sy * t * aspect]
+                  for sx in (-1.0, 1.0) for sy in (-1.0, 1.0)])
+    d /= np.linalg.norm(d, axis=-1, keepdims=True)
+    p, yw = math.radians(pitch), math.radians(yaw)
+    rx = np.array([[1, 0, 0], [0, math.cos(p), -math.sin(p)],
+                   [0, math.sin(p), math.cos(p)]])
+    rz = np.array([[math.cos(yw), math.sin(yw), 0],
+                   [-math.sin(yw), math.cos(yw), 0], [0, 0, 1]])
+    return d @ (rz @ rx).T
+
+
+def _inside(driver, lens: int, yaw: float, pitch: float, fov: float,
+            aspect: float) -> bool:
+    """Ask the DRIVER, not a cone. An EAC lens boundary is a cube-face edge
+    extended by the overlap, which is not a cone around the lens axis; planning
+    against a cone left 0.1% of each outer view outside the lens."""
+    return bool(driver.covers(_corner_dirs(fov, aspect, yaw, pitch), lens).all())
+
+
+def _max_offset(driver, lens: int, pitch: float, fov: float,
+                aspect: float) -> float:
     """Largest yaw offset from the lens axis that keeps the view inside it."""
-    lo, hi = 0.0, 180.0
-    if _covered_fraction(driver, lens, driver.lenses[lens].yaw_deg, pitch, fov,
-                         aspect) < need:
+    base = driver.lenses[lens].yaw_deg
+    if not _inside(driver, lens, base, pitch, fov, aspect):
         return 0.0     # the view is wider than the lens; centre it and clip
-    for _ in range(24):
+    lo, hi = 0.0, 180.0
+    for _ in range(30):
         mid = (lo + hi) / 2
-        f = _covered_fraction(driver, lens, driver.lenses[lens].yaw_deg + mid,
-                              pitch, fov, aspect)
-        lo, hi = (mid, hi) if f >= need else (lo, mid)
+        lo, hi = (mid, hi) if _inside(driver, lens, base + mid, pitch, fov,
+                                      aspect) else (lo, mid)
     return lo
 
 
@@ -144,7 +169,43 @@ def plan_views(driver, cfg: dict | None = None) -> list[dict]:
                      view_overlap_deg=float(cfg.get("view_overlap_deg", 12.0)))
 
 
-def describe(plan: list[dict]) -> str:
+def sphere_coverage(driver, plan: list[dict], width: int = 512) -> dict:
+    """What fraction of the sphere the plan actually images.
+
+    Views are clipped to their own lens, so a plan can leave a wedge at the
+    lens boundary uncovered -- on a first-generation MAX (2.2 deg of overlap)
+    it does. That is not necessarily a problem, because the rig is moving: a
+    direction blind at yaw 90 now was imaged head-on a second ago. But it must
+    not be silent, so the planner measures and prints it.
+    """
+    from .eac import equirect_dirs                     # noqa: PLC0415
+    dirs = equirect_dirs(width)
+    seen = np.zeros(dirs.shape[:-1], bool)
+    for v in plan:
+        t = math.tan(math.radians(v["fov"]) / 2.0)
+        aspect = v["height"] / v["width"]
+        p_, y_ = math.radians(v["pitch"]), math.radians(v["yaw"])
+        rx = np.array([[1, 0, 0], [0, math.cos(p_), -math.sin(p_)],
+                       [0, math.sin(p_), math.cos(p_)]])
+        rz = np.array([[math.cos(y_), math.sin(y_), 0],
+                       [-math.sin(y_), math.cos(y_), 0], [0, 0, 1]])
+        local = dirs @ (rz @ rx)          # inverse of the plan's rotation
+        fwd = local[..., 1]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            in_view = (fwd > 1e-9) & (np.abs(local[..., 0] / fwd) <= t) \
+                & (np.abs(local[..., 2] / fwd) <= t * aspect)
+        seen |= in_view & driver.covers(dirs, v["lens"])
+    lat = np.arcsin(np.clip(dirs[..., 2], -1, 1))
+    # +-10 deg: narrow enough that a down-pitched plan covers it vertically by
+    # construction, so what this measures is YAW completeness -- i.e. whether
+    # the per-lens views leave a wedge at the boundary. A wider band would
+    # mostly report the pitch, which is a deliberate choice, not a gap.
+    band = np.abs(lat) <= math.radians(10)
+    return {"sphere": float(seen.mean()),
+            "horizon_band": float(seen[band].mean())}
+
+
+def describe(plan: list[dict], driver=None) -> str:
     by_lens: dict = {}
     for v in plan:
         by_lens.setdefault(v["lens_name"], []).append(v)
@@ -155,4 +216,13 @@ def describe(plan: list[dict]) -> str:
         lines.append(f"  {name:>6}: {len(vs)} x {v0['fov']:g} deg "
                      f"{v0['width']}x{v0['height']} "
                      f"({v0['width'] / v0['fov']:.1f} px/deg)  yaw {yaws}")
+    if driver is not None:
+        c = sphere_coverage(driver, plan)
+        note = ""
+        if c["horizon_band"] < 0.999:
+            note = ("  <-- blind wedge at the lens boundary; the rig is moving, "
+                    "so those directions are still imaged from other frames")
+        lines.append(f"  covers {c['horizon_band']:.1%} of the horizon "
+                     f"(+-10 deg band), {c['sphere']:.1%} of the full "
+                     f"sphere{note}")
     return "\n".join(lines)
