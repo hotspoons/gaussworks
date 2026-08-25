@@ -10,7 +10,14 @@
 set -euo pipefail
 
 COLMAP_VER=${COLMAP_VER:-3.11.1}
-GLOMAP_VER=${GLOMAP_VER:-1.2.0}         # NB: GLOMAP tags carry no "v" prefix
+# GLOMAP 1.0.0, NOT the latest. 1.2.0 vendors a COLMAP from Oct 2025 that
+# models multi-camera setups as rigs; it opens a COLMAP 3.11 database, migrates
+# in empty rigs/rig_sensors/frames tables, completes an entire reconstruction,
+# and then ABORTS writing the model (`Check failed: existing_rig.RefSensorId()
+# == rig.RefSensorId()`). Match the COLMAP generation instead. NB: GLOMAP tags
+# carry no "v" prefix, and its vendored COLMAP needs GUI_ENABLED=OFF or it
+# demands Qt5.
+GLOMAP_VER=${GLOMAP_VER:-1.0.0}
 GSPLAT_REF=${GSPLAT_REF:-main}
 EXIFTOOL_VER=${EXIFTOOL_VER:-13.44}     # 12.90+ required for GoPro GPS9
 CERES_CUDA=${CERES_CUDA:-0}             # 1 = build Ceres with CUDA (see below)
@@ -98,12 +105,14 @@ fi
 # is CPU-only: measured 4h53m on a 3,870-image chunk, against 73 min for all
 # the GPU feature/matching stages combined. GLOMAP solves all images at once.
 # poses.py picks it up automatically whenever it is on PATH -- so a pod without
-# it silently runs the slow path. Verify, do not assume.
+# it silently runs the slow path. VERIFY BY RUNNING A REAL MAPPING: `glomap -h`
+# happily prints "compiled with CUDA!" on a binary that cannot finish one.
 if [ ! -x /workspace/opt/sfm/bin/glomap ]; then
     [ -d /workspace/src/glomap ] || \
         git clone --depth 1 -b "${GLOMAP_VER}" https://github.com/colmap/glomap /workspace/src/glomap
     cmake -S /workspace/src/glomap -B /workspace/src/glomap/build -GNinja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+        -DGUI_ENABLED=OFF -DTESTS_ENABLED=OFF \
         -DCMAKE_PREFIX_PATH=/workspace/opt/sfm \
         -DCMAKE_INSTALL_PREFIX=/workspace/opt/sfm
     cmake --build /workspace/src/glomap/build --target install -j "$CXX_JOBS"

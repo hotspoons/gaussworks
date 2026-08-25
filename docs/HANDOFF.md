@@ -57,7 +57,7 @@ That script installs, all onto the PVC so they survive container restarts:
 | Component | Version | Where | Why this version |
 | --- | --- | --- | --- |
 | COLMAP | 3.11.1, CUDA | `/workspace/opt/sfm` | GPU SIFT |
-| GLOMAP | 1.2.0, CUDA | `/workspace/opt/sfm` | global SfM; see §1.5 |
+| GLOMAP | **1.0.0**, CUDA | `/workspace/opt/sfm` | global SfM; 1.2.0 is broken here — trap 7 |
 | ExifTool | 13.44 | `/workspace/opt/exiftool` | **GPS9 support, mandatory** |
 | gsplat | 1.6.0 (+examples) | `/workspace/opt/gsplat` | Apache-2.0 trainer |
 | venv | Python 3.12 | `/workspace/venv` | `--system-site-packages` for torch |
@@ -265,9 +265,12 @@ that will bite a fresh pod:
 
    All four street chunks, ~2 h of global SfM each, discarded at the write.
    Keep the COLMAP generation consistent across the toolchain, or use GLOMAP
-   1.0.0 (predates the rig model). `--mapper auto|glomap|colmap` now makes the
-   choice explicit rather than "whatever is on PATH". COLMAP 3.11.1 maps a
-   migrated database without complaint, so the fallback is safe.
+   1.0.0 (predates the rig model) — now the default in
+   `pod-build-stack.sh`, which also passes `-DGUI_ENABLED=OFF`, because 1.0.0's
+   vendored COLMAP demands Qt5 otherwise. `--mapper auto|glomap|colmap` makes
+   the choice explicit rather than "whatever is on PATH". COLMAP 3.11.1 maps a
+   GLOMAP-migrated database without complaint, so the fallback is safe:
+   verified at **954/954 images, 0.698 px** on `chunk_x0_y0`.
 8. **After a container restart, build dependencies are gone too.**
    `pod-bootstrap.sh` restores the *runtime* libraries COLMAP links against,
    not the `-dev` packages. The next `cmake` fails on a missing Eigen3 or

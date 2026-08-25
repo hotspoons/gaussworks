@@ -13,7 +13,7 @@ ARG BASE_IMAGE=harbor.tools.basedweights.com/patapsco.ai/ai-dev-pod:0.12.0
 # --- SfM builder --------------------------------------------------------------
 FROM ${BASE_IMAGE} AS sfm-builder
 ARG COLMAP_VER=3.11.1
-ARG GLOMAP_VER=1.2.0
+ARG GLOMAP_VER=1.0.0
 ARG CUDA_ARCHS=80;89;90;120
 
 USER root
@@ -54,12 +54,17 @@ RUN git clone --depth 1 -b ${COLMAP_VER} https://github.com/colmap/colmap /tmp/c
     && rm -rf /tmp/colmap
 
 # GLOMAP: global SfM, much faster than incremental mapper on road sequences
-# NB: GLOMAP's tags carry no "v" prefix (1.2.0, not v1.2.0). `-b v1.0.0` fails
-# the clone, which is how this stage was silently absent from the running pod.
+# GLOMAP 1.0.0, not the latest: 1.2.0 vendors an Oct-2025 COLMAP whose rig
+# model aborts when writing a reconstruction built from a COLMAP 3.11 database
+# (see docs/LANDSCAPE.md). Two more traps in one line: GLOMAP's tags carry no
+# "v" prefix, so `-b v1.0.0` fails the clone -- which is how this stage was
+# silently absent from the running pod -- and its vendored COLMAP demands Qt5
+# unless GUI_ENABLED is off.
 RUN git clone --depth 1 -b ${GLOMAP_VER} https://github.com/colmap/glomap /tmp/glomap \
     && cmake -S /tmp/glomap -B /tmp/glomap/build -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+        -DGUI_ENABLED=OFF -DTESTS_ENABLED=OFF \
         -DCMAKE_PREFIX_PATH=/opt/sfm \
         -DCMAKE_INSTALL_PREFIX=/opt/sfm \
     && cmake --build /tmp/glomap/build --target install \
