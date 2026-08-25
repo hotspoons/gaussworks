@@ -387,35 +387,78 @@ wait for the pod, then connect with the platform's VS Code plugin. Two notes:
   deploy/devpod.yaml --dry-run=server`. That caught an invented `memory:` field
   once (the real one is `resources.limits.memory`).
 
-### 2.4 First run in the new pod
+### 2.4 First run in the new pod — start small
 
+**Scale is the biggest cost lever in this pipeline, and it is easy to get
+wrong.** COLMAP's incremental mapper is superlinear in image count. Measured on
+the street capture, same settings, same GPU:
+
+| Chunk | Images | Incremental mapping |
+| --- | --- | --- |
+| `chunk_x0_y0` | 954 | **22 min** |
+| `chunk_x0_y-1` | 3,870 | **4h53m** (and it died before writing the model) |
+
+Four times the images, thirteen times the time. A four-chunk run over 300 m of
+road is a 10–14 hour job; a one-chunk run over 150 m is under an hour
+end to end. **Almost every question worth asking is answerable at one chunk.**
+The 23.07 dB baseline was measured on 942 images in a single chunk.
+
+So work in tiers, and only go up a tier when the tier below has told you
+something:
+
+**Tier 0 — is the rig decoded correctly? (~1 min)**
 ```bash
-# after §1.3 provisioning and all six gates in §1.4 pass
-cd /workspace/gaussworks && source /workspace/venv/bin/activate
-export PATH=/workspace/opt/sfm/bin:/workspace/opt/exiftool:$PATH
-export EXIFTOOL=/workspace/opt/exiftool/exiftool GSPLAT_EXAMPLES=/workspace/opt/gsplat/examples
-
-setsid nohup bash -c '
-  splatpipe --config configs/hq.yaml ingest \
-    /workspace/data/raw/GS010002.360 /workspace/data/raw/GS020002.360 \
-    /workspace/data/raw/GS030002.360 \
-    --out /workspace/data/street --near 38.983984,-76.695795 --radius-m 150 \
-    --spacing-m 1.0 --segment-s 45 --hwaccel cuda &&
-  splatpipe --config configs/hq.yaml mask  --frames /workspace/data/street &&
-  splatpipe --config configs/hq.yaml chunk --frames /workspace/data/street &&
-  splatpipe poses --chunks /workspace/data/street/chunks --matcher spatial &&
-  splatpipe train --chunks /workspace/data/street/chunks --steps 30000 &&
-  touch /workspace/street.DONE
-' > /workspace/street.log 2>&1 < /dev/null &
+splatpipe verify /workspace/data/raw/GS010002.360 --out /tmp/v --at 90 --hwaccel cuda
 ```
 
-Then, to see whether the per-lens change actually paid off:
-
+**Tier 1 — the quality loop (~45 min end to end).** One chunk, ~150 capture
+positions, ~950 images. This is where you answer "did that change help?".
 ```bash
-splatpipe eval --chunk /workspace/data/street/chunks/<chunk> \
-  /workspace/data/street/chunks/<chunk>/ckpts/*.pt
-splatpipe drive --chunk /workspace/data/street/chunks/<chunk>   # flythrough video
+splatpipe --config configs/hq.yaml ingest /workspace/data/raw/GS010002.360 \
+  --out /workspace/data/t1 --near 38.983984,-76.695795 --radius-m 60 \
+  --spacing-m 1.25 --segment-s 45 --hwaccel cuda
+splatpipe --config configs/hq.yaml mask  --frames /workspace/data/t1
+splatpipe --config configs/hq.yaml chunk --frames /workspace/data/t1 --cell-m 0   # 0 = one chunk
+splatpipe poses --chunks /workspace/data/t1/chunks --matcher spatial --mapper colmap
+splatpipe train --chunks /workspace/data/t1/chunks --steps 30000
+splatpipe eval  --chunk /workspace/data/t1/chunks/chunk_x0_y0 \
+  /workspace/data/t1/chunks/chunk_x0_y0/ckpts/*.pt      # compare against 23.07 dB
 ```
+Note `--cell-m 0` (single chunk, no halo duplication), one chapter, and
+`--radius-m 60`. Those three choices are the difference between 45 minutes and
+most of a day.
 
-`--near` is the driveway; `--radius-m 150` bounds it to the street. Progress:
-`splatpipe status --chunks /workspace/data/street/chunks`.
+**Tier 2 — the street (hours).** Three chapters, `--radius-m 150`,
+`--spacing-m 1.0`, `cell_m: 150` → 916 positions, 4 chunks, 11,130
+image-memberships. Only worth it once Tier 1 says the settings are right. This
+is what `/workspace/data/street2` on the old pod is, and it is where the
+10–14 hour figure comes from.
+
+**Tier 3 — the neighbourhood.** All 30 GB, no `--near` filter. Overnight on one
+GPU at minimum; this is what the multi-node work queue exists for (point N
+workers at one chunk directory — see §1.1).
+
+Progress at any tier: `splatpipe status --chunks <dir>`. A flythrough of a
+trained chunk: `splatpipe drive --chunk <chunk>`.
+
+### 2.5 State left on the old pod
+
+`/workspace/data/street2` — Tier 2, stopped part-way, deliberately:
+
+| Chunk | Images | State |
+| --- | --- | --- |
+| `chunk_x0_y0` | 954 | **solved: 954/954 images, 188,389 points, 0.698 px** |
+| `chunk_x-1_y0` | 1,986 | database complete (28,121 verified pairs), unmapped |
+| `chunk_x0_y-1` | 3,870 | database complete (63,400 verified pairs), unmapped |
+| `chunk_x-1_y-1` | 4,320 | database complete (65,766 verified pairs), unmapped |
+
+**No training has run, so the per-lens change still has no PSNR number.**
+`chunk_x0_y0` is solved and correctly sized to produce one — `splatpipe train
+--chunks .../street2/chunks --only chunk_x0_y0 --steps 30000` then `splatpipe
+eval` is roughly 30 minutes if you want it off the old pod before
+decommissioning. Otherwise Tier 1 above reproduces it from scratch in the new
+pod in about 45 minutes, which is the cleaner option.
+
+Worth copying up if you want the baseline for comparison:
+`data/hoodhq/chunks/*/ckpts` and `.../sparse` — that is the **23.07 dB**
+reference, a few hundred MB rather than the full 6.4 GB.
