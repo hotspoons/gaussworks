@@ -42,9 +42,16 @@ def _install_mask_patch(examples: Path):
 
         applied = 0
         for cam_id, folder in cam_folder.items():
-            shared = masks_root / folder / "_mask.png"
+            # chunks carry one symlink per image (COLMAP's convention) and not
+            # necessarily the shared _mask.png, so fall back to any of them --
+            # every mask for a camera is the same image by construction
+            cam_masks = masks_root / folder
+            shared = cam_masks / "_mask.png"
             if not shared.exists():
-                continue
+                candidates = sorted(cam_masks.glob("*.png"))
+                if not candidates:
+                    continue
+                shared = candidates[0]
             mask = cv2.imread(str(shared), cv2.IMREAD_GRAYSCALE)
             if mask is None:
                 continue
