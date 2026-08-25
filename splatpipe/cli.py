@@ -86,6 +86,9 @@ def main():
     s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
     s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
+    s.add_argument("--spatial-radius", type=int, default=4,
+                   help="spatial matching reach, in capture positions either "
+                        "side (scaled internally by cameras x passes)")
 
     s = sub.add_parser("train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
@@ -254,7 +257,8 @@ def main():
         solve_all(args.chunks,
                   matcher=args.matcher or cfg.get("matcher", "spatial"),
                   align=not args.no_align and cfg.get("align", True),
-                  only=args.only)
+                  only=args.only,
+                  spatial_radius=args.spatial_radius or cfg.get("spatial_radius", 4))
 
     elif args.cmd == "train":
         from .train import train_all

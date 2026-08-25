@@ -33,8 +33,18 @@ def _largest_model(models_dir: Path) -> Path:
                if (p / "images.bin").exists() else 0)
 
 
+def _rig_size(chunk: Path) -> tuple[int, int]:
+    """(cameras, passes) — how many images share one capture position."""
+    cams_path, meta_path = chunk / "cameras.json", chunk / "meta.json"
+    n_cams = len(json.loads(cams_path.read_text())) if cams_path.exists() else 1
+    n_pass = 1
+    if meta_path.exists():
+        n_pass = max(1, len(json.loads(meta_path.read_text()).get("passes") or []))
+    return n_cams, n_pass
+
+
 def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
-                use_gpu: bool = True):
+                use_gpu: bool = True, spatial_radius: int = 4):
     db = chunk / "colmap.db"
     sparse = chunk / "sparse"
     if (sparse / "0").exists():
@@ -75,10 +85,33 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
     _run(extract)
 
     if matcher == "spatial" and (chunk / "geo.txt").exists():
+        n_cams, n_pass = _rig_size(chunk)
+        # SIZE THE NEIGHBOURHOOD TO THE RIG, or spatial matching quietly
+        # collapses. Every virtual view of one capture position carries that
+        # position's GPS, and every pass down the road revisits it, so
+        # n_cams * n_pass images sit at essentially the same coordinate --
+        # 6 x 3 = 18 here. A fixed 32 neighbours is then +-1 position of road,
+        # the match graph becomes a razor-thin chain, and the incremental
+        # mapper builds ONE local component and stops: observed as a
+        # contiguous block of 100 of 331 positions registered, every camera at
+        # the identical rate.
+        neighbors = max(32, n_cams * n_pass * spatial_radius * 2)
+        print(f"[poses] {chunk.name}: {n_cams} cams x {n_pass} pass(es) at each "
+              f"position -> {neighbors} spatial neighbours "
+              f"(~{spatial_radius} positions either side)")
         _run(["colmap", "spatial_matcher",
               "--database_path", str(db),
               "--SpatialMatching.ignore_z", "1",
-              "--SpatialMatching.max_num_neighbors", "32",
+              "--SpatialMatching.max_num_neighbors", str(neighbors),
+              "--SiftMatching.use_gpu", gpu])
+        # Then the long chain along the road. Image names are
+        # camK/NNNNNN.jpg, so name order is per-camera and per-pass in capture
+        # order: sequential matching adds exactly the reach spatial matching
+        # cannot afford, at a fraction of the pairs. Matches accumulate in the
+        # same database, so this is additive.
+        _run(["colmap", "sequential_matcher",
+              "--database_path", str(db),
+              "--SequentialMatching.overlap", "15",
               "--SiftMatching.use_gpu", gpu])
     elif matcher == "exhaustive":
         # small chunks: all-pairs matching links the rig's cam folders, which
@@ -123,14 +156,15 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
 
 
 def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
-              only: list[str] | None = None):
+              only: list[str] | None = None, spatial_radius: int = 4):
     chunks = list_chunks(chunks_dir)
     if only:
         chunks = [c for c in chunks if any(o in c.name for o in only)]
         print(f"[poses] --only {only}: {len(chunks)} chunk(s)")
     q = WorkQueue(chunks_dir, "poses")
     print(f"[poses] worker {q.worker}: {len(chunks)} chunk(s) in the pool")
-    done, failed = q.run(chunks, lambda c: solve_chunk(c, matcher=matcher, align=align))
+    done, failed = q.run(chunks, lambda c: solve_chunk(
+        c, matcher=matcher, align=align, spatial_radius=spatial_radius))
     print(f"[poses] worker {q.worker}: solved {len(done)}, failed {len(failed)}")
     if failed:
         raise SystemExit(f"[poses] failed chunks: {failed}")
