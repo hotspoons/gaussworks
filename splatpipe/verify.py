@@ -57,7 +57,8 @@ def _budget(video: Path):
 
 
 def verify(video: Path, out: Path, at_s: float = 5.0,
-           profile: str | None = None, view_cfg: dict | None = None) -> Path:
+           profile: str | None = None, view_cfg: dict | None = None,
+           hwaccel: str | None = None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"[verify] {video.name}  ({video.stat().st_size / 1e9:.2f} GB)")
@@ -88,9 +89,14 @@ def verify(video: Path, out: Path, at_s: float = 5.0,
         print("[verify] GPS: NONE FOUND -- enable GPS on the camera, or chunking "
               "and geo-alignment will not work")
 
-    fps = max(1.0 / max(at_s, 0.5), 0.05)   # one frame at ~at_s in
+    # SEEK to at_s and decode half a second, rather than filtering one frame
+    # out of the whole clip: a .360 is two 8K HEVC tracks, and decoding 7
+    # minutes of that to look at one frame takes longer than the drive did.
     with tempfile.TemporaryDirectory() as td:
-        cands = extract_candidates_multi(video, Path(td), fps, driver.ffmpeg_maps())
+        cands = extract_candidates_multi(video, Path(td), 2.0,
+                                         driver.ffmpeg_maps(),
+                                         hwaccel=hwaccel, start_s=at_s,
+                                         duration_s=0.5)
         if not cands:
             raise SystemExit("[verify] no frames decoded")
         frames = [cv2.imread(str(p)) for p in cands[0][1]]

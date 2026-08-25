@@ -43,6 +43,24 @@ licence column below is about.
 | [simple_photogrammetry_gui](https://github.com/edin45/simple_photogrammetry_gui) | GPL-3.0 | Flutter GUI wrapping the above | good ideas + parts list; no code borrowing |
 | [UnityGaussianSplatting](https://github.com/aras-p/UnityGaussianSplatting) | MIT | splats in Unity | the hybrid engine path |
 
+## 360 stitching: surveyed, then deliberately not used
+
+Full write-up in [SEAM.md](SEAM.md). Short version: every open stitcher solves
+a problem we do not have, and solving it damages the input we do need.
+
+| Tool | Licence | What it does with the lens overlap | Verdict |
+| --- | --- | --- | --- |
+| [max2sphere](https://github.com/trek-view/max2sphere) | Apache-2.0 | hard pick per pixel | **in use** — our EAC decoder derives from it (see THIRD_PARTY.md) |
+| ffmpeg [`vf_gopromax_opencl`](https://patchwork.ffmpeg.org/project/ffmpeg/patch/20240803005601.44246-2-aimingoff@pc.nifty.jp/) | LGPL | linear alpha ramp over the 64 px strip | reference implementation of .360 → equirect; **ghosts near objects exactly as our old cross-fade did** |
+| GoPro D.WARP (in-camera / Player) | proprietary, patented ([11568516](https://patents.google.com/patent/US11568516), [11748952](https://patents.google.com/patent/US11748952)) | depth/optical-flow local warp until disparity cancels | best-looking, **worst input** — destroys the disparity and breaks the central-projection assumption SfM needs |
+| [Surround360](https://github.com/facebookarchive/Surround360) / [Panorama-OpticalFlow](https://github.com/MungoMeng/Panorama-OpticalFlow) | BSD / MIT | optical-flow stitch | same objection as D.WARP |
+| Hugin / enblend | GPL | seam finding + multiband blend | invoke-only anyway; no parallax model |
+| [Seam360GS](https://arxiv.org/abs/2508.20080) (ICCV 2025) | paper, CC-BY | models the two optical centres explicitly instead of stitching | **agrees with our approach**; worth reading if we ever want a rig-constrained trainer |
+
+Our answer is `splatpipe/viewplan.py`: plan the virtual cameras *inside* each
+lens' cone so no training image ever contains a join. Same image count as the
+old ring, no seam to blend.
+
 ## Pitfalls (all hit for real, all cost hours)
 
 **Build / environment**
@@ -72,7 +90,9 @@ licence column below is about.
 - **gsplat supports per-camera masks but its COLMAP parser never loads them** (`mask_dict[camera_id] = None`). Masks reach COLMAP and not training unless you patch it -- see `splatpipe/gsplat_masked.py`.
 - **A module named `queue.py` inside the package shadows the stdlib `queue`** for any script run from that directory; torch imports `from queue import Queue` deep in its stack and training dies. Renamed to `workqueue.py`.
 - **gsplat normalises world space by default**, recentring and rescaling into a unit box -- which silently discards the shared ENU frame that merge, mesh and drive all depend on. Train with `--no-normalize-world-space`.
-- **Virtual views can under-sample the sphere.** 4 × 100° at 1600 px is 16 px/deg, while 8K EAC faces hold ~21. *(open)*
+- **Virtual views can under-sample the sphere.** 4 × 100° at 1600 px is 16 px/deg, while 8K EAC faces hold ~21. Fixed: profiles carry a `px_per_deg` default (24 for Max 2) and the plan sizes views from it.
+- **A view that straddles the lens boundary is two viewpoints in one image.** The old fixed yaw ring put the boundary inside four of six views, at yaw ±90° — broadside, where the nearest objects are. Cross-fading it grew duplicate geometry (a truck appearing twice, a roof overlapping itself); hard-cutting it leaves a discontinuity. Neither is fixable downstream. Plan views inside each lens' cone instead — [SEAM.md](SEAM.md).
+- **Do not hardcode a camera's geometry into pipeline code.** The EAC template, lens count, lens axes, telemetry source and sensible view density are all *hardware facts*, and burying them in ingest made the Max 2 look like a special case and an Insta360 look like a rewrite. They now live in `splatpipe/data/profiles/*.yaml`, behind a driver interface that is three methods wide.
 - Reframe at high shutter speed; motion blur is unfixable downstream.
 
 ## Measurements
@@ -108,3 +128,5 @@ backwards.
 - Is Brush a viable second trainer, and does it unlock non-CUDA hardware?
 - Which texture-bake path is both good and permissive (mvs-texturing licence pending)?
 - Does depth fusion behave on driving capture, or do we switch to MVS?
+- How much does per-lens view planning actually buy, in dB and in visible ghosting? (baseline to beat: **23.07 dB** on the street chunk, seam-blended ingest)
+- Do the shipped `insta360-x3` / `insta360-x4` profiles survive contact with a real .insv? Their `geometry.circles` are from published specs, not measured.

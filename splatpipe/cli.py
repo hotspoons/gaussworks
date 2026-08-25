@@ -95,6 +95,7 @@ def main():
     s.add_argument("--out", type=Path, default=Path("data/verify"))
     s.add_argument("--at", type=float, default=5.0, help="seconds into the clip")
     s.add_argument("--profile", help="camera profile name (default: auto-detect)")
+    s.add_argument("--hwaccel", help="e.g. cuda")
 
     s = sub.add_parser("eval", help="compare checkpoints on visible (unmasked) pixels")
     s.add_argument("--chunk", required=True, type=Path)
@@ -258,7 +259,7 @@ def main():
     elif args.cmd == "verify":
         from .verify import verify
         verify(args.video, args.out, at_s=args.at, profile=args.profile,
-               view_cfg=_cfg(args.config, "ingest"))
+               view_cfg=_cfg(args.config, "ingest"), hwaccel=args.hwaccel)
 
     elif args.cmd == "eval":
         from .evaluate import evaluate
