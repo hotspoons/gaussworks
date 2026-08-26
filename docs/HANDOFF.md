@@ -195,11 +195,12 @@ the first ~100 m (trap 13). Data lives in `/workspace/data/street{A,B,B13}`.
 | **A** — pass 1 only, `--start-s 0 --duration-s 60` | 1,014 (972 reg., 0.75 px) | GLOMAP 8 min | ADC default, masks, AA, 30k, 77 min | **21.22 dB** | 429,878 |
 | A2 — same, `--preset mcmc --strategy.cap-max 2000000` | " | " | 48 min | 15.66 dB | 2,000,000 |
 | A3 — same, `--strategy.absgrad --strategy.grow-grad2d 0.0008` | " | " | 80 min | 17.45 dB | 263,133 |
-| A4 — same, `--strategy.grow-grad2d 0.0001` | " | " | (see logs/trainA4.log) | | |
+| A4 — same, `--strategy.grow-grad2d 0.0001` | " | " | 106 min | 17.55 dB | 512,304 |
+| A5 — exact repeat of A under `--tag repro` (determinism control) | " | " | (see logs/trainA5.log) | | |
 | B — all four passes, `--near … --radius-m 150` | 4,194 (100% reg., 0.78 px) | GLOMAP 88 min | not trained | alignment 39 m: **bent world** | |
 | B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 (100%, 0.80 px) | GLOMAP 64 min | not trained | alignment 15.5 m: **still bent** (passes 9.7 m apart, z std 3–7 m) | |
 | B13 re-BA — exact intrinsics reset, `bundle_adjuster` refine off | " | +35 min | | unchanged: 0.80 px and still bent → not an intrinsics problem | |
-| B13c — B13 database, COLMAP incremental mapper, intrinsics fixed | " | (see logs/posesB13c.log) | | | |
+| B13c — B13 database, COLMAP incremental mapper, intrinsics fixed | " (100%, 0.75 px) | 3 h 35 min | (see logs/trainB13c.log) | passes 1.2 m apart where overlapping, Δz 0.4 m; per-pass z std 0.9–2.7 m — usable, ~1–2 m of bend left | |
 | B13v — B13 database + spatial 576 neighbours + vocab-tree retrieval, GLOMAP | " | (see logs/posesB13v.log) | | | |
 
 What those taught:
@@ -222,8 +223,18 @@ What those taught:
   decimation). `drive` now trims initial reversals and takes its heading over
   3 m of road; the SfM corridor keeps 1.5 m spacing.
 - **Densification tweaks lost to plain ADC** on this chunk: MCMC preset
-  −5.6 dB, absgrad −3.8 dB (fewer gaussians, not more). Measure before
-  believing a strategy paper.
+  −5.6 dB (its 2M gaussians ended up nowhere near the scene), absgrad
+  −3.8 dB, denser ADC −3.7 dB. All three land at ~17.5 dB with a translucent
+  veil over every view, and are already 3.4 dB behind at step 7k — a fragile
+  optimum, not a density story. The trainer is seeded (42), so A5 repeats A's
+  exact config to confirm determinism; if A5 matches A, the next single
+  changes are the stabilisers: `--strategy.prune-scale3d 0.02` (on this
+  un-normalised metric scene the default keeps gaussians up to 10.5 m) and
+  `--random-bkgd`.
+- **The incremental mapper with fixed intrinsics beats GLOMAP 1.0.0 on
+  multi-pass data** (B13c vs B13): passes 1.2 m apart instead of 9 m, at the
+  cost of 3.5 h vs 1 h. Loop-closure matching (B13v, `--loop-closure vocab`)
+  is the attempt to make the fast path correct.
 - **Bad GPS bends multi-pass models through MATCHING, not alignment.**
   Spatial matching trusts each image's GPS prior; with the outbound pass
   15–19 m off, its cross-pass neighbours were the wrong stretch of road
