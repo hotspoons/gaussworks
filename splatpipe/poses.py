@@ -62,12 +62,22 @@ def _largest_model(models_dir: Path) -> Path:
 
 
 def _rig_size(chunk: Path) -> tuple[int, int]:
-    """(cameras, passes) — how many images share one capture position."""
+    """(cameras, passes) — how many images share one capture position.
+
+    meta.json's `passes` is the list of source VIDEOS, which undercounts: one
+    chapter can drive through a cell several times (the street run passes the
+    house three times in GS010002 alone). corridor.json already splits the
+    chunk's frames into contiguous drives by gap and by video, so its pass
+    count is the honest one; take the larger of the two.
+    """
     cams_path, meta_path = chunk / "cameras.json", chunk / "meta.json"
     n_cams = len(json.loads(cams_path.read_text())) if cams_path.exists() else 1
     n_pass = 1
     if meta_path.exists():
         n_pass = max(1, len(json.loads(meta_path.read_text()).get("passes") or []))
+    corridor = chunk / "corridor.json"
+    if corridor.exists():
+        n_pass = max(n_pass, len(json.loads(corridor.read_text()).get("passes") or []))
     return n_cams, n_pass
 
 
