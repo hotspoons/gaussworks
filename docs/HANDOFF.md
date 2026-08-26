@@ -43,40 +43,44 @@ in [SEAM.md](SEAM.md).
 - A GPU dev pod, `/workspace` backed by a persistent volume (see
   [../deploy/devpod.yaml](../deploy/devpod.yaml); the manifest carries a
   **27 Gi memory limit** — do not remove it, see §1.7).
-- Base image `ai-dev-pod:0.12.0` or any CUDA-enabled torch image. Ubuntu 24.04,
-  Python 3.12, torch 2.9.1, CUDA 13 in the reference pod.
-- `sudo` available for `apt-get` (build deps live on the container filesystem).
+- Any Ubuntu 24.04 image with `python3`, `uv`, `gcc` and `sudo`. **Nothing else
+  is assumed any more** — the current pod (2026-08-26) shipped with no torch,
+  no CUDA toolkit and no ffmpeg, so the build script installs all three onto
+  the PVC. 16 cores / 62 GB / A100-PCIE-40GB / no cgroup memory limit.
 
 ### 1.3 Provision
 
 ```bash
 git clone https://github.com/hotspoons/gaussworks /workspace/gaussworks
 cd /workspace/gaussworks
-CUDA_ARCHS=80 bash scripts/pod-build-stack.sh          # ~60-90 min, idempotent
+bash scripts/pod-build-stack.sh          # ~60-90 min, idempotent; arch from nvidia-smi
 ```
 
-`CUDA_ARCHS` is the compute capability of the pod's GPU without the dot — `80`
-for A100, `89` L40S, `90` GH200/H200, `120` RTX Pro Blackwell. Get it from
-`nvidia-smi --query-gpu=compute_cap --format=csv,noheader`. **Pass only the one
-you have**; see §1.7.
-
-Add `CERES_CUDA=1` only if you expect to run COLMAP's incremental mapper (you
-should not — see §1.5).
+`CUDA_ARCHS` defaults to the installed GPU's compute capability (`80` A100,
+`89` L40S, `90` GH200/H200, `120` RTX Pro Blackwell). **Build only the one you
+have**; see §1.7. The CUDA toolkit major (`CUDA_RUNFILE`, 13.0.x) must match
+the torch wheel index (`TORCH_INDEX`, cu130).
 
 That script installs, all onto the PVC so they survive container restarts:
 
 | Component | Version | Where | Why this version |
 | --- | --- | --- | --- |
+| CUDA toolkit | 13.0.2 (runfile, `--toolkitpath`) | `/workspace/opt/cuda` | nvcc for COLMAP + gsplat; the image has none |
+| torch | 2.9.1+cu130 | `/workspace/venv` | uv-made venv, no system torch to inherit |
 | COLMAP | 3.11.1, CUDA | `/workspace/opt/sfm` | GPU SIFT |
 | GLOMAP | **1.0.0**, CUDA | `/workspace/opt/sfm` | global SfM; 1.2.0 is broken here — trap 7 |
-| ExifTool | 13.44 | `/workspace/opt/exiftool` | **GPS9 support, mandatory** |
+| bundled `.so`s | from `ldd` | `/workspace/opt/sfm/lib/bundled` | COLMAP/GLOMAP run after a restart with **no apt** |
+| ExifTool | 13.44 (GitHub tag mirror) | `/workspace/opt/exiftool` | **GPS9 support, mandatory** |
 | gsplat | 1.6.0 (+examples) | `/workspace/opt/gsplat` | Apache-2.0 trainer |
-| venv | Python 3.12 | `/workspace/venv` | `--system-site-packages` for torch |
+| `.deb` cache | everything apt installed | `/workspace/apt-cache` | offline bootstrap |
 | splatpipe | editable | `/workspace/gaussworks` | this repo |
 
-After a **container restart** (not a fresh pod), the PVC survives but the
-apt-installed shared libraries COLMAP links against do not, and it exits 127.
-Recovery is `bash scripts/pod-bootstrap.sh` — seconds, not an hour.
+After a **container restart** (not a fresh pod), the PVC survives; the home
+dir, apt state and `~/.bashrc` do not. Recovery is
+`bash scripts/pod-bootstrap.sh` — seconds, offline-capable: it installs ffmpeg
+and the build tools from the `.deb` cache, re-links the editable install, hooks
+`/workspace/env.sh` into `~/.bashrc`, and starts the Claude Code state sync
+(§1.5).
 
 ### 1.4 Verification gates
 
@@ -120,18 +124,23 @@ profile geometry is wrong.
 
 ### 1.5 The environment contract
 
-`scripts/pod-build-stack.sh` appends this to `~/.bashrc`; re-add it by hand if
-you use a different shell:
+**`/workspace/env.sh`** (source: `scripts/env.sh`) is the one file every shell
+and every job sources. It sets `CUDA_HOME`, `PATH` (cuda, sfm, exiftool),
+`LD_LIBRARY_PATH` (cuda + bundled libs), `EXIFTOOL`, `GSPLAT_EXAMPLES`, the
+uv/pip/torch-extension caches, `GIT_CONFIG_GLOBAL=/workspace/.gitconfig`, then
+sources `gsplat-env.sh` and activates the venv. `~/.bashrc` gets one line that
+sources it. **Non-interactive shells (`bash -lc`, `nohup`, cron) skip
+`.bashrc`** — start every script with `source /workspace/env.sh`.
 
-```bash
-export PATH=/workspace/opt/sfm/bin:/workspace/opt/exiftool:$PATH
-export EXIFTOOL=/workspace/opt/exiftool/exiftool
-export GSPLAT_EXAMPLES=/workspace/opt/gsplat/examples
-source /workspace/gaussworks/scripts/gsplat-env.sh
-source /workspace/venv/bin/activate
-```
+Two more things live on the PVC because the home dir does not:
 
-`gsplat-env.sh` is the **single source of truth** for the JIT build
+- `/workspace/.gitconfig` + `/workspace/.git-credentials` (identity, PAT store).
+- `~/.claude` — Claude Code's memory, sessions and settings. `scripts/claude-sync.sh
+  start` (called by bootstrap; add it to the pod init script too) restores it
+  from `/workspace/.claude-backup` when the home copy is empty, then rsyncs it
+  back every 5 min. It refuses to sync an empty home over a full backup.
+
+`gsplat-env.sh` remains the **single source of truth** for the JIT build
 environment, and every entry point must source it. torch hashes the build
 config into the cached extension, so launching the trainer and the viewer with
 different flags rebuilds every fused rasterizer kernel from scratch (~30 min
@@ -292,7 +301,23 @@ that will bite a fresh pod:
    `pod-bootstrap.sh` restores the *runtime* libraries COLMAP links against,
    not the `-dev` packages. The next `cmake` fails on a missing Eigen3 or
    Ceres config. Re-run the apt block from `pod-build-stack.sh` first.
-9. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
+9. **`exiftool.org` only serves the newest release.** The 13.44 tarball the
+   scripts pinned returned 404 within weeks. Fetch tags from
+   `github.com/exiftool/exiftool/archive/refs/tags/<ver>.tar.gz` instead; any
+   12.90+ works.
+10. **EAC face edges drew a black line** until 2026-08-26. `eac_maps` produced
+   pixel-edge coordinates and `cv2.remap` wants pixel centres, so the last
+   half-row of every cube face was bilinearly mixed with the black border —
+   a dashed 1 px dark line at yaw 135°/225° in every rear view (cam3/cam5), a
+   fixed-column feature SIFT matches across frames. `splatpipe verify` output
+   is how it was caught: measure column gradients at the predicted face edge
+   (`960 + f·tan(Δyaw)`), not just eyeball. Fixed by a half-pixel shift plus
+   clamping inside the face; anything ingested before commit `37f6708`
+   carries the line.
+11. **Trap 4 again, from the other side.** A waiter loop written as
+   `until pgrep -f gps-fence.py …` never exits, because the loop's own command
+   line contains the pattern. Wait on marker files or output content.
+12. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a
    correctly-applied fix look like it had never run. `flush=True` everywhere.
