@@ -1,0 +1,70 @@
+# MOUNTAIN BIKE capture: 360 camera for trail previews, ridden not walked.
+#
+# UNPROVEN, like configs/trail-hike.yaml -- reasoned from the driving and
+# hiking settings, not measured. See docs/TRAILVIEW.md.
+#
+# Same product as the hiking config (same trails, same viewer, same rail), but
+# 3-6 m/s changes the sampling arithmetic and a helmet mount changes what the
+# camera is rigidly attached to.
+#
+# 1. EXTRACT RATE GOES BACK UP. This is the inversion. Hiking at 1.4 m/s can
+#    afford 8 fps because candidates land 0.18 m apart. At 5 m/s, 8 fps puts
+#    them 0.63 m apart -- so a 0.75 m window holds barely one candidate and
+#    `spacing_m` silently stops meaning anything, exactly the trap the road
+#    config documents. 30 fps at 5 m/s gives 0.17 m spacing and ~4 candidates
+#    per window to pick the sharpest from, which on a bike matters more than
+#    anywhere else because most frames ARE blurred.
+#
+# 2. SPACING LOOSENS SLIGHTLY. Still a close scene (foliage 1-3 m), so still
+#    far denser than a road, but 0.6 m of travel at riding speed carries more
+#    motion blur than 0.6 m walked. 0.75 m keeps the count sane over the much
+#    longer distances a bike covers in a session.
+#
+# 3. PITCH IS A GUESS UNLESS YOU LEVEL. A helmet pitches with the rider's head
+#    -- scanning the trail, looking through corners, dropping into a chute --
+#    so a fixed view pitch does not reliably point anywhere. GoPro writes a
+#    GravityVector into GPMF; levelling the view plan against it (proposed,
+#    NOT implemented -- see docs/TRAILVIEW.md) is the real fix. Until then,
+#    -12 is a compromise: shallower than the hiking config, because a rider's
+#    head is usually up and looking ahead.
+#
+# 4. MASKING IS THE OPEN PROBLEM. mask.py assumes the occluder is rigid in the
+#    camera frame; a helmet rotates relative to the shoulders and pack beneath
+#    it, so they sweep. A BAR, STEM OR CHEST MOUNT avoids this entirely and is
+#    the recommended starting point. If you must use a helmet, expect to hand
+#    draw a generous lower-cone mask (masks/<cam>/_mask.png).
+#
+# Capture protocol: stabilization OFF (it rotates the image relative to the
+# sensor and breaks the fixed lens-boundary geometry the view plan depends on
+# -- and a rider wants it on more than anyone, so this is the easiest rule to
+# break by accident). Shutter locked as fast as light allows; vibration and
+# speed make motion blur the dominant quality limit here. Ride it steady, not
+# fast, and ride it both directions.
+ingest:
+  fov: 80
+  px_per_deg: 24
+  pitch: [-12]
+  view_overlap_deg: 12
+  extract_fps: 30          # see 1 -- decode cost buys sharpness selection
+  spacing_m: 0.75
+  jpeg_quality: 96
+
+chunk:
+  # A bike covers 3-5x the ground per session, so cells stay small to keep any
+  # one chunk inside the range where COLMAP's mapper is still fast (HANDOFF.md
+  # 2.4: 954 images map in 22 min, 3,870 in 4h53m).
+  cell_m: 100
+  overlap_m: 25
+  min_frames: 20
+
+corridor:
+  radius_m: 6              # singletrack, same as hiking
+  height_margin_m: 6       # a little more: jumps, berms, drops
+  min_spacing_m: 3
+  gap_m: 25
+
+poses:
+  # Same canopy-GPS problem as hiking, and worse coverage per fix at speed.
+  # The sequential pass poses.py runs alongside spatial needs no GPS at all.
+  matcher: spatial
+  align: true

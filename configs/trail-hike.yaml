@@ -1,4 +1,6 @@
-# Walking capture: 360 camera on a backpack pole, for trail previews.
+# HIKING capture: 360 camera on a backpack pole, for trail previews.
+# Riding the same trail? Use configs/trail-bike.yaml -- the sampling maths
+# inverts at 3-6 m/s and a helmet mount breaks two assumptions this one makes.
 #
 # UNPROVEN. Every other config in here has been run on real footage; this one
 # is derived from the driving settings by reasoning about what actually

@@ -19,11 +19,13 @@ things that have already cost hours, and most of them are not guessable.
 
 - **drivable racing-game stages** from car-mounted capture of Maryland back
   roads — every measurement in this repo comes from this path;
-- **trail previews for trailworks** — the same pipeline walked rather than
-  driven, ending in a railed browser flythrough of a hiking trail. Not yet
+- **trail previews for trailworks** — the same pipeline walked or ridden
+  rather than driven, ending in a railed browser flythrough of a trail. Hiking
+  and mountain biking are one product with two capture configs. Not yet
   attempted. Capture deltas, the canopy-GPS risk most likely to sink a first
   attempt, renderer options and the open UX question are in
-  [TRAILVIEW.md](TRAILVIEW.md); `configs/trail.yaml` is the starting point.
+  [TRAILVIEW.md](TRAILVIEW.md); `configs/trail-hike.yaml` and
+  `configs/trail-bike.yaml` are the starting points.
 
 Five stages, each a plain CLI over files on disk:
 

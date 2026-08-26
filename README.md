@@ -16,14 +16,14 @@ detail layer.
 geo-aligned splat world → mesh/export for a moddable racing sim (Assetto Corsa
 first). Everything measured in this repo so far comes from this path.
 
-**Trail previews for trailworks.** The same pipeline, walked instead of
-driven: a 360 camera on a backpack pole, and a railed browser flythrough so
+**Trail previews for trailworks.** The same pipeline, walked or ridden
+instead of driven: a 360 camera on a backpack pole or a bike, and a railed browser flythrough so
 someone can preview a trail before driving to the trailhead. The corridor
 machinery already serves it — `guardrail.py` clamps a camera to the observed
 path, and for a trail *the rail is the trail*. Not yet attempted; the capture
 deltas, the canopy-GPS risk, the three.js renderer options and the open UX
 question are worked out in [docs/TRAILVIEW.md](docs/TRAILVIEW.md), with a
-starting config in `configs/trail.yaml`.
+starting configs in `configs/trail-hike.yaml` and `configs/trail-bike.yaml`.
 
 ## Pipeline
 
