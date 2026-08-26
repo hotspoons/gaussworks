@@ -200,7 +200,7 @@ the first ~100 m (trap 13). Data lives in `/workspace/data/street{A,B,B13}`.
 | B — all four passes, `--near … --radius-m 150` | 4,194 (100% reg., 0.78 px) | GLOMAP 88 min | not trained | alignment 39 m: **bent world** | |
 | B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 (100%, 0.80 px) | GLOMAP 64 min | not trained | alignment 15.5 m: **still bent** (passes 9.7 m apart, z std 3–7 m) | |
 | B13 re-BA — exact intrinsics reset, `bundle_adjuster` refine off | " | +35 min | | unchanged: 0.80 px and still bent → not an intrinsics problem | |
-| B13c — B13 database, COLMAP incremental mapper, intrinsics fixed | " (100%, 0.75 px) | 3 h 35 min | (see logs/trainB13c.log) | passes 1.2 m apart where overlapping, Δz 0.4 m; per-pass z std 0.9–2.7 m — usable, ~1–2 m of bend left | |
+| B13c — B13 database, COLMAP incremental mapper, intrinsics fixed | " (100%, 0.75 px) | 3 h 35 min | ADC default, 30k, 65 min | passes 1.2 m apart where overlapping, Δz 0.4 m; **17.32 dB** | 91,262 |
 | B13v — B13 database + spatial 576 neighbours + vocab-tree retrieval, GLOMAP | " | (see logs/posesB13v.log) | | | |
 
 What those taught:
@@ -244,6 +244,14 @@ What those taught:
   multi-pass data** (B13c vs B13): passes 1.2 m apart instead of 9 m, at the
   cost of 3.5 h vs 1 h. Loop-closure matching (B13v, `--loop-closure vocab`)
   is the attempt to make the fast path correct.
+- **Metre-level cross-pass registration is not good enough to train on.**
+  B13c's 1.2 m offset between passes made the same surfaces arrive twice;
+  ADC pruned the model from 640k to 91k gaussians and it scored 17.32 dB
+  against 21.2 dB for the single pass. Multi-pass splats need centimetre
+  co-registration — the bar for any mapper/matcher change is
+  `pose-check.py` reporting pass-to-pass distances well under 0.5 m where
+  passes overlap, before spending an hour training. The three per-pass
+  drive videos are in `data/streetB13c/drive/pass{0,1,2}/`.
 - **Bad GPS bends multi-pass models through MATCHING, not alignment.**
   Spatial matching trusts each image's GPS prior; with the outbound pass
   15–19 m off, its cross-pass neighbours were the wrong stretch of road
