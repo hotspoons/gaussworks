@@ -317,7 +317,22 @@ that will bite a fresh pod:
 11. **Trap 4 again, from the other side.** A waiter loop written as
    `until pgrep -f gps-fence.py …` never exits, because the loop's own command
    line contains the pattern. Wait on marker files or output content.
-12. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
+12. **`/dev/shm` is 64 MB on this pod, and read-only to remount.** gsplat's
+   trainer hands 33 MB float images between 4 loader workers through shared
+   memory and died at step 0 ("DataLoader worker exited unexpectedly"), twice,
+   and the queue marked the chunk failed. `splatpipe/gsplat_masked.py` now
+   drops to in-process loading when shm is under 1 GB (~10-15% slower).
+   The right fix is in the pod spec: a `Memory` emptyDir on `/dev/shm`, as
+   `deploy/devpod.yaml` already declares. Check with `df -h /dev/shm` before
+   the first training run on any new pod.
+13. **GPS needs a minute.** The street recording started in a driveway under
+   canopy with an unconverged fix: 15-19 m horizontal and 10 m vertical error
+   for the first ~80 positions, ~1 m after that, while SfM stayed at 0.75 px.
+   The alignment residual (9.7 m mean) was entirely this. `poses` now rebuilds
+   `corridor.json` from the solved cameras, so drive/merge/export use the
+   truth; but chunking and spatial-matching priors still come from GPS, so
+   power the camera on and let it settle in the open before recording.
+14. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a
    correctly-applied fix look like it had never run. `flush=True` everywhere.
