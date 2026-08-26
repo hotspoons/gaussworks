@@ -194,9 +194,13 @@ the first ~100 m (trap 13). Data lives in `/workspace/data/street{A,B,B13}`.
 | --- | --- | --- | --- | --- | --- |
 | **A** — pass 1 only, `--start-s 0 --duration-s 60` | 1,014 (972 reg., 0.75 px) | GLOMAP 8 min | ADC default, masks, AA, 30k, 77 min | **21.22 dB** | 429,878 |
 | A2 — same, `--preset mcmc --strategy.cap-max 2000000` | " | " | 48 min | 15.66 dB | 2,000,000 |
-| A3 — same, `--strategy.absgrad --strategy.grow-grad2d 0.0008` | " | " | (see logs/trainA3.log) | | |
+| A3 — same, `--strategy.absgrad --strategy.grow-grad2d 0.0008` | " | " | 80 min | 17.45 dB | 263,133 |
+| A4 — same, `--strategy.grow-grad2d 0.0001` | " | " | (see logs/trainA4.log) | | |
 | B — all four passes, `--near … --radius-m 150` | 4,194 (100% reg., 0.78 px) | GLOMAP 88 min | not trained | alignment 39 m: **bent world** | |
-| B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 | (see logs/posesB13.log) | | | |
+| B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 (100%, 0.80 px) | GLOMAP 64 min | not trained | alignment 15.5 m: **still bent** (passes 9.7 m apart, z std 3–7 m) | |
+| B13 re-BA — exact intrinsics reset, `bundle_adjuster` refine off | " | +35 min | | unchanged: 0.80 px and still bent → not an intrinsics problem | |
+| B13c — B13 database, COLMAP incremental mapper, intrinsics fixed | " | (see logs/posesB13c.log) | | | |
+| B13v — B13 database + spatial 576 neighbours + vocab-tree retrieval, GLOMAP | " | (see logs/posesB13v.log) | | | |
 
 What those taught:
 
@@ -217,6 +221,21 @@ What those taught:
   camera looked backwards) and snapped at the court's corner (5 m corridor
   decimation). `drive` now trims initial reversals and takes its heading over
   3 m of road; the SfM corridor keeps 1.5 m spacing.
+- **Densification tweaks lost to plain ADC** on this chunk: MCMC preset
+  −5.6 dB, absgrad −3.8 dB (fewer gaussians, not more). Measure before
+  believing a strategy paper.
+- **Bad GPS bends multi-pass models through MATCHING, not alignment.**
+  Spatial matching trusts each image's GPS prior; with the outbound pass
+  15–19 m off, its cross-pass neighbours were the wrong stretch of road
+  (2,110 verified pairs to the homeward pass vs 18,316 within itself).
+  GLOMAP then had nothing to pin the pass with: 0.80 px reprojection and 9 m
+  between two passes of the same road. Resetting intrinsics and re-running BA
+  changed nothing, which is how we know it is the constraints, not the
+  focal lengths (GLOMAP 1.0.0 does drift them 0.5–0.9% and cannot be told
+  not to). Retrieval-based matching (`poses --loop-closure vocab`) does not
+  care where GPS thinks an image is; `bin/pose-check.py` is the sanity check
+  (per-pass z scatter and pass-to-pass distance) to run before training any
+  multi-pass chunk.
 - The A model is good along the open street and blobby in the canopy and
   near field; it is one pass at 4–5 m/s. Density (A3) and both-direction
   coverage (B13) are the two levers being measured.

@@ -95,7 +95,13 @@ def main():
                         "a complete database (the default)")
     s.add_argument("--spatial-radius", type=int, default=4,
                    help="spatial matching reach, in capture positions either "
-                        "side (scaled internally by cameras x passes)")
+                        "side (scaled internally by cameras x passes). GPS "
+                        "error larger than this reach hides cross-pass pairs; "
+                        "see --loop-closure")
+    s.add_argument("--loop-closure", choices=["none", "vocab"], default=None,
+                   help="add retrieval-based matching (COLMAP vocab tree) after "
+                        "spatial+sequential, for multi-pass chunks whose GPS "
+                        "priors cannot be trusted (default: config, else none)")
 
     s = sub.add_parser("train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
@@ -276,7 +282,8 @@ def main():
                   align=not args.no_align and cfg.get("align", True),
                   only=args.only,
                   spatial_radius=args.spatial_radius or cfg.get("spatial_radius", 4),
-                  refresh=args.refresh, mapper=args.mapper)
+                  refresh=args.refresh, mapper=args.mapper,
+                  loop_closure=args.loop_closure or cfg.get("loop_closure", "none"))
 
     elif args.cmd == "train":
         from .train import train_all

@@ -187,9 +187,39 @@ def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
                   f"database) before mapping.", flush=True)
 
 
+VOCAB_TREE_URL = "https://demuc.de/colmap/vocab_tree_flickr100K_words256K.bin"
+
+
+def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50) -> None:
+    """Loop-closure matching by image retrieval: pairs that LOOK alike, wherever
+    GPS says they are.
+
+    Spatial matching trusts the GPS prior in every image. On the street run the
+    first ~100 m of GPS were 15-19 m off (cold start under canopy), so the
+    outbound pass's cross-pass "neighbours" were the wrong stretch of road:
+    2,110 verified pairs to the homeward pass against 18,316 within itself,
+    and GLOMAP had nothing to pin the pass with -- the model came out bent by
+    9 m between passes at 0.8 px reprojection. Retrieval does not care where
+    the GPS thinks an image is. Matches accumulate in the database, so this
+    is additive to spatial + sequential. The tree lives on the PVC and is
+    fetched once ($COLMAP_VOCAB_TREE overrides the path).
+    """
+    tree = Path(os.environ.get("COLMAP_VOCAB_TREE",
+                               "/workspace/opt/colmap-vocab/vocab_tree_flickr100K_words256K.bin"))
+    if not tree.exists():
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[poses] fetching vocabulary tree -> {tree}", flush=True)
+        _run(["curl", "-fL", "--retry", "5", "-o", str(tree), VOCAB_TREE_URL])
+    _run(["colmap", "vocab_tree_matcher", "--database_path", str(db),
+          "--VocabTreeMatching.vocab_tree_path", str(tree),
+          "--VocabTreeMatching.num_images", str(num_images),
+          "--SiftMatching.use_gpu", gpu])
+
+
 def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
                 use_gpu: bool = True, spatial_radius: int = 4,
-                refresh: bool = False, mapper: str = "auto"):
+                refresh: bool = False, mapper: str = "auto",
+                loop_closure: str = "none"):
     db = chunk / "colmap.db"
     sparse = chunk / "sparse"
     if (sparse / "0").exists():
@@ -267,6 +297,8 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
               "--database_path", str(db),
               "--SequentialMatching.overlap", "15",
               "--SiftMatching.use_gpu", gpu])
+        if loop_closure == "vocab":
+            _vocab_tree_match(db, gpu)
     elif matcher == "exhaustive":
         # small chunks: all-pairs matching links the rig's cam folders, which
         # sequential (name-ordered) matching never crosses
@@ -375,7 +407,8 @@ def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool,
 
 def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
               only: list[str] | None = None, spatial_radius: int = 4,
-              refresh: bool = False, mapper: str = "auto"):
+              refresh: bool = False, mapper: str = "auto",
+              loop_closure: str = "none"):
     chunks = list_chunks(chunks_dir)
     if only:
         chunks = [c for c in chunks if any(o in c.name for o in only)]
@@ -384,7 +417,7 @@ def solve_all(chunks_dir: Path, matcher: str = "spatial", align: bool = True,
     print(f"[poses] worker {q.worker}: {len(chunks)} chunk(s) in the pool", flush=True)
     done, failed = q.run(chunks, lambda c: solve_chunk(
         c, matcher=matcher, align=align, spatial_radius=spatial_radius,
-        refresh=refresh, mapper=mapper))
+        refresh=refresh, mapper=mapper, loop_closure=loop_closure))
     print(f"[poses] worker {q.worker}: solved {len(done)}, failed {len(failed)}", flush=True)
     if failed:
         raise SystemExit(f"[poses] failed chunks: {failed}")
