@@ -42,9 +42,40 @@ def _smooth(points: np.ndarray, window: int) -> np.ndarray:
                      for c in range(3)], axis=1)
 
 
+def trim_reversals(points: np.ndarray, head_m: float = 25.0,
+                   turn_deg: float = 120.0) -> tuple[np.ndarray, float]:
+    """Drop a reversing manoeuvre at the start of a pass.
+
+    A capture that begins in a driveway backs out first: the path goes one
+    way for a few metres, stops, and comes back through the same spot. A
+    camera replaying that looks the wrong way for the first seconds and
+    renders the least-observed part of the scene. Cut at the last heading
+    flip (> turn_deg) inside the first head_m metres; returns (path, metres
+    dropped)."""
+    if len(points) < 4:
+        return points, 0.0
+    seg = np.diff(points[:, :2], axis=0)
+    dist = np.concatenate([[0.0], np.cumsum(np.linalg.norm(seg, axis=1))])
+    cut = 0
+    for i in range(1, len(seg)):
+        if dist[i] > head_m:
+            break
+        a, b = seg[i - 1], seg[i]
+        na, nb = np.linalg.norm(a), np.linalg.norm(b)
+        if na < 1e-6 or nb < 1e-6:
+            continue
+        ang = np.degrees(np.arccos(np.clip(a @ b / (na * nb), -1.0, 1.0)))
+        if ang > turn_deg:
+            cut = i
+    return points[cut:], float(dist[cut])
+
+
 def camera_path(points: np.ndarray, height_offset_m: float = 0.0,
                 look_ahead: int = 4) -> np.ndarray:
-    """camera-to-world matrices along a path, OpenCV axes (x right, y down, z fwd)."""
+    """camera-to-world matrices along a path, OpenCV axes (x right, y down, z fwd).
+
+    `look_ahead` is in samples; callers size it from the sample spacing so the
+    heading is taken over a few metres of road, not a few centimetres."""
     pts = points.copy()
     pts[:, 2] += height_offset_m
     mats = []
@@ -112,9 +143,14 @@ def render(chunk: Path, out: Path | None = None, ckpt: Path | None = None,
     K = torch.tensor([[f, 0, width / 2], [0, f, height / 2], [0, 0, 1]],
                      dtype=torch.float32, device=device)
 
-    pts = _smooth(_resample(np.asarray(passes[0]["points"], dtype=np.float64),
-                            spacing_m), smooth_window)
-    c2w = camera_path(pts, height_offset_m)
+    raw, dropped = trim_reversals(np.asarray(passes[0]["points"], dtype=np.float64))
+    if dropped:
+        print(f"[drive] skipped a reversing manoeuvre: first {dropped:.0f} m", flush=True)
+    # heading over ~3 m of road and smoothing over ~3 m, whatever the frame spacing
+    window = max(smooth_window, int(round(3.0 / spacing_m)) | 1)
+    look_ahead = max(4, int(round(3.0 / spacing_m)))
+    pts = _smooth(_resample(raw, spacing_m), window)
+    c2w = camera_path(pts, height_offset_m, look_ahead=look_ahead)
     print(f"[drive] {len(c2w)} frames, {len(pts) * spacing_m:.0f} m at "
           f"{spacing_m * fps * 3.6:.0f} km/h equivalent", flush=True)
 

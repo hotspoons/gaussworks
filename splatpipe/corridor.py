@@ -92,7 +92,7 @@ def build(frames, origin, radius_m=25.0, height_margin_m=8.0,
 
 
 def from_sparse(chunk: Path, radius_m=25.0, height_margin_m=8.0,
-                min_spacing_m=5.0, gap_m=30.0, gap_s=30.0) -> dict | None:
+                min_spacing_m=1.5, gap_m=30.0, gap_s=30.0) -> dict | None:
     """Corridor from the SOLVED camera centres in <chunk>/sparse/0.
 
     The GPS corridor is only as good as the fix. On the first street run the
@@ -106,7 +106,9 @@ def from_sparse(chunk: Path, radius_m=25.0, height_margin_m=8.0,
 
     One point per capture position: the mean of every registered view at that
     seq (they share an optical centre to within the lens baseline). Passes are
-    split with the same rules as the GPS corridor. Returns None if the chunk
+    split with the same rules as the GPS corridor. Decimation is 1.5 m rather
+    than the GPS corridor's 5 m: a 90 degree corner decimated to 5 m is a single
+    vertex, and a camera replaying it snaps its heading there. Returns None if the chunk
     has no solved model or no frame records to recover time/video from.
     """
     import pycolmap                                 # noqa: PLC0415
