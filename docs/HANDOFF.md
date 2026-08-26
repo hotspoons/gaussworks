@@ -436,7 +436,12 @@ that will bite a fresh pod:
    did exactly that. `train` now refuses a >50% black cloud and runs
    `color_extractor` first; check with `pose-check.py`-style inspection of
    `points3D` colours if a run ever sits at a flat loss.
-15. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
+15. **Vocabulary trees come in two formats.** COLMAP 3.10+ reads faiss-format
+   trees (`vocab_tree_faiss_*.bin` on the GitHub release page); the classic
+   `demuc.de` files are the FLANN-era format and make 3.11.1's
+   `vocab_tree_matcher` abort with a core dump — after it has spent 70 min
+   indexing every image. `poses --loop-closure vocab` fetches the right one.
+16. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a
    correctly-applied fix look like it had never run. `flush=True` everywhere.

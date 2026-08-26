@@ -187,7 +187,9 @@ def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
                   f"database) before mapping.", flush=True)
 
 
-VOCAB_TREE_URL = "https://demuc.de/colmap/vocab_tree_flickr100K_words256K.bin"
+# COLMAP >= 3.10 reads faiss-format trees; the demuc.de FLANN-era file makes
+# 3.11.1 abort with a core dump AFTER indexing every image (70 min on 3,324).
+VOCAB_TREE_URL = "https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin"
 
 
 def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50) -> None:
@@ -205,7 +207,7 @@ def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50) -> None:
     fetched once ($COLMAP_VOCAB_TREE overrides the path).
     """
     tree = Path(os.environ.get("COLMAP_VOCAB_TREE",
-                               "/workspace/opt/colmap-vocab/vocab_tree_flickr100K_words256K.bin"))
+                               "/workspace/opt/colmap-vocab/vocab_tree_faiss_flickr100K_words256K.bin"))
     if not tree.exists():
         tree.parent.mkdir(parents=True, exist_ok=True)
         print(f"[poses] fetching vocabulary tree -> {tree}", flush=True)
