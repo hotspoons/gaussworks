@@ -5,6 +5,8 @@ Written for **a coding agent starting from a raw `/workspace`**, plus a section
 for the human on what to copy up. Everything here has been executed on a real
 pod; where a number appears, it was measured, not estimated.
 
+**Rebuilding the pod after the platform reinstall? [WORKSPACE-RESTORE.md](WORKSPACE-RESTORE.md)** — the PV, how to reattach it, and the fallback.
+
 Read [LANDSCAPE.md](LANDSCAPE.md) before changing anything. It is the list of
 things that have already cost hours, and most of them are not guessable.
 

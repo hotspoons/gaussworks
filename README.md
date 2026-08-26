@@ -158,6 +158,8 @@ Then:
 .venv/bin/splatpipe train  --chunks data/run1/chunks
 ```
 
+> **Platform reinstall / new pod onto the existing volume?** [docs/WORKSPACE-RESTORE.md](docs/WORKSPACE-RESTORE.md).
+>
 > **Starting from a fresh pod or handing this to someone else?**
 > [docs/HANDOFF.md](docs/HANDOFF.md) is the executable version of everything
 > below: provisioning from a raw `/workspace`, six verification gates, what to
