@@ -197,6 +197,8 @@ the first ~100 m (trap 13). Data lives in `/workspace/data/street{A,B,B13}`.
 | A3 — same, `--strategy.absgrad --strategy.grow-grad2d 0.0008` | " | " | 80 min | 17.45 dB | 263,133 |
 | A4 — same, `--strategy.grow-grad2d 0.0001` | " | " | 106 min | 17.55 dB | 512,304 |
 | A5 — exact repeat of A under `--tag repro` (determinism control) | " | " | 105 min | **21.32 dB** | 429,801 |
+| 7k probes: A / `--strategy.prune-scale3d 0.02` / `--random-bkgd` | " | " | 7k steps each | 19.21 / **20.17** / **20.34** dB | 205k / 234k / 255k |
+| A6 `--random-bkgd`, A7 `--random-bkgd --strategy.prune-scale3d 0.02` | " | " | 30k (see logs/trainA67.log) | | |
 | B — all four passes, `--near … --radius-m 150` | 4,194 (100% reg., 0.78 px) | GLOMAP 88 min | not trained | alignment 39 m: **bent world** | |
 | B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 (100%, 0.80 px) | GLOMAP 64 min | not trained | alignment 15.5 m: **still bent** (passes 9.7 m apart, z std 3–7 m) | |
 | B13 re-BA — exact intrinsics reset, `bundle_adjuster` refine off | " | +35 min | | unchanged: 0.80 px and still bent → not an intrinsics problem | |
@@ -239,7 +241,11 @@ What those taught:
   gaussians up to 10.5 m), `--random-bkgd`, `--strategy.reset-every 1500`,
   and running with `--steps 60000` to see whether the bad basin is just
   slower. Compare at step 7k first — the split is already 3.4 dB there,
-  which makes the experiment 15 min instead of 100.
+  which makes the experiment 15 min instead of 100. **Done for the first
+  two**: at 7k, `--random-bkgd` +1.13 dB and `--strategy.prune-scale3d 0.02`
+  +0.96 dB over the baseline — the first knobs that have helped, and both are
+  stabilisers rather than density knobs, which supports the fragile-optimum
+  reading. 30k confirmations are A6/A7.
 - **The incremental mapper with fixed intrinsics beats GLOMAP 1.0.0 on
   multi-pass data** (B13c vs B13): passes 1.2 m apart instead of 9 m, at the
   cost of 3.5 h vs 1 h. Loop-closure matching (B13v, `--loop-closure vocab`)
