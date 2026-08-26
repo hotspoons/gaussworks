@@ -62,7 +62,7 @@ fi
 echo "[pod-bootstrap] done"
 echo "  nvcc:     $(command -v nvcc || echo MISSING)"
 echo "  colmap:   $(colmap -h 2>&1 | sed -n 2p || echo MISSING)"
-echo "  glomap:   $(glomap -h 2>&1 | sed -n 3p || echo MISSING)"
+echo "  glomap:   $(glomap -h 2>&1 | head -1 || echo MISSING)"
 echo "  exiftool: $(exiftool -ver 2>/dev/null || echo MISSING)  (GPS9 tags: $(exiftool -listx 2>/dev/null | grep -c GPS9))"
 echo "  ffmpeg:   $(ffmpeg -hide_banner -hwaccels 2>/dev/null | grep -c cuda) cuda hwaccel"
 echo "  python:   $(command -v python)  torch $(python -c 'import torch;print(torch.__version__)' 2>/dev/null || echo MISSING)"

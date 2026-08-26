@@ -268,7 +268,32 @@ What those taught:
   near field; it is one pass at 4–5 m/s. Density (A3) and both-direction
   coverage (B13) are the two levers being measured.
 
-**Next, and worth doing properly: declare the rig.** The GLOMAP failure above
+**What to do next, in order.**
+
+1. **Cross-pass registration to centimetres.** This is the blocker for every
+   multi-pass chunk, i.e. for the whole neighbourhood. Read B13v's outcome
+   (`logs/posesB13v2.log`, `pose-check.py data/streetB13v/chunks/chunk_000`):
+   if loop-closure matching got passes under ~0.5 m, train it and compare to
+   21.3 dB. If not, the promising routes are (a) the rig declaration below
+   with COLMAP 3.12 (one pose per capture position, six fixed offsets — far
+   fewer parameters for BA to bend), (b) solve each pass alone (single passes
+   come out flat at 0.1 m z scatter), align to GPS, then
+   `point_triangulator` + `bundle_adjuster` over the merged model with the
+   database's cross-pass matches, (c) gsplat `--pose-opt` on top of a
+   sub-metre initialisation.
+2. **The fragile optimum** (A vs A2–A4): understand it before tuning
+   anything else; test at 7k steps.
+3. **Second camera** (Rich borrows a GoPro tomorrow, low mount): ingest as
+   its own `pinhole` profile run and merge at the chunk stage; it is the only
+   fix for road crown. The lens boundary work (`viewplan.py`) is done and
+   verified on real frames — do not reopen it.
+4. **Scale-out**: `pod-build-stack.sh` is assembled from what was actually
+   run on this pod but has not been executed end-to-end on a fresh PVC;
+   `pod-bootstrap.sh` has (7 s). The queue architecture is untouched, so the
+   GH200 rack / 8×H200 node need only the stack on their PVC and
+   `CUDA_ARCHS=90`.
+
+**Then, worth doing properly: declare the rig.** The GLOMAP failure above
 points at something real. Our six virtual cameras are not six independent
 cameras — they are one rigid rig whose relative orientations we know
 *exactly*, because we synthesised them from the view plan (yaw/pitch per
