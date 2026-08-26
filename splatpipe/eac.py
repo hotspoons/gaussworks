@@ -171,11 +171,21 @@ def eac_maps(dirs: np.ndarray, tpl: Template, lens: int | None = None) -> EacMap
                     0, 1 - 1e-7)
         trk, section = FACE_SLOT[f]
         track[m] = trk
-        iy[m] = v * tpl.height
+        # PIXEL CENTRES, CLAMPED INTO THE FACE. cv2.remap reads coordinate c as
+        # the centre of pixel c, so face parameter u in [0,1) maps to column
+        # x0 + u*W - 0.5, not x0 + u*W. Without the half-pixel shift the last
+        # row/column of every face was bilinearly mixed with whatever lies
+        # beyond it: the neighbouring section (a different face) or, at the
+        # top and bottom rows, remap's black border. On real footage that drew
+        # a dark one-pixel line along every face row-edge -- yaw 135/225 deg in
+        # the rear views -- a fixed-column artefact SIFT happily matches across
+        # frames. Clamping keeps the interpolation inside the face's own pixels.
+        iy[m] = np.clip(v * tpl.height - 0.5, 0.0, tpl.height - 1.0)
         if section == 1:
             # a centre face lies wholly inside one lens' hemisphere
             owner = 0 if float(C @ FRONT_AXIS) > 0 else 1
-            ix[m] = tpl.side + u * tpl.height
+            ix[m] = np.clip(tpl.side + u * tpl.height - 0.5,
+                            tpl.side, tpl.side + tpl.height - 1.0)
             ix2[m] = ix[m]
             if lens is not None and lens != owner:
                 valid[m] = False
@@ -191,21 +201,24 @@ def eac_maps(dirs: np.ndarray, tpl: Template, lens: int | None = None) -> EacMap
         front_is_b = float(U @ FRONT_AXIS) > 0
         lens_a = 1 if front_is_b else 0
 
+        def col(uu):     # section-local param -> pixel-centre column inside it
+            return np.clip(x0 + uu * tpl.side - 0.5, x0, x0 + tpl.side - 1.0)
+
         if lens is None:
             lo, hi = 0.5 - 2 * duv, 0.5 + 2 * duv
             in_a = u_a <= lo
             in_b = u_b >= hi
             w = np.clip((u_a - lo) / max(2 * duv, 1e-9), 0.0, 1.0)
             w = np.where(in_a, 0.0, np.where(in_b, 1.0, w))
-            ix[m] = x0 + np.where(in_b, u_b, u_a) * tpl.side
-            ix2[m] = x0 + u_b * tpl.side
+            ix[m] = col(np.where(in_b, u_b, u_a))
+            ix2[m] = col(u_b)
             weight[m] = np.where(in_a | in_b, 0.0, w)
         elif lens == lens_a:
-            ix[m] = x0 + u_a * tpl.side
+            ix[m] = col(u_a)
             ix2[m] = ix[m]
             valid[m] = u <= tpl.u_a_max
         else:
-            ix[m] = x0 + u_b * tpl.side
+            ix[m] = col(u_b)
             ix2[m] = ix[m]
             valid[m] = u >= tpl.u_b_min
 
@@ -239,8 +252,12 @@ class EacSampler:
         mp = self._maps(key, dirs, lens)
 
         def pick(col):
-            a = cv2.remap(track1, col, mp.iy, cv2.INTER_LINEAR)
-            b = cv2.remap(track2, col, mp.iy, cv2.INTER_LINEAR)
+            # maps are already clamped inside their face; replicate is a
+            # belt-and-braces guard so no black border can ever bleed in
+            a = cv2.remap(track1, col, mp.iy, cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+            b = cv2.remap(track2, col, mp.iy, cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
             return np.where(mp.track[..., None] == 0, a, b)
 
         primary = pick(mp.ix)
