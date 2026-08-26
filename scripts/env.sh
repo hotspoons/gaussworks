@@ -9,6 +9,7 @@ export GSPLAT_EXAMPLES=/workspace/opt/gsplat/examples
 export UV_CACHE_DIR=/workspace/.uv-cache
 export PIP_CACHE_DIR=/workspace/.pip-cache
 export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions
+export TORCH_HOME=/workspace/.torch-home          # torchvision/LPIPS weights, otherwise re-downloaded after every restart
 # git identity + credential store on the PVC (the container's ~/.gitconfig and
 # ~/.git-credentials vanish on every restart)
 export GIT_CONFIG_GLOBAL=/workspace/.gitconfig
