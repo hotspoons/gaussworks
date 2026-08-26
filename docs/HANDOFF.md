@@ -436,11 +436,15 @@ that will bite a fresh pod:
    did exactly that. `train` now refuses a >50% black cloud and runs
    `color_extractor` first; check with `pose-check.py`-style inspection of
    `points3D` colours if a run ever sits at a flat loss.
-15. **Vocabulary trees come in two formats.** COLMAP 3.10+ reads faiss-format
-   trees (`vocab_tree_faiss_*.bin` on the GitHub release page); the classic
-   `demuc.de` files are the FLANN-era format and make 3.11.1's
-   `vocab_tree_matcher` abort with a core dump — after it has spent 70 min
-   indexing every image. `poses --loop-closure vocab` fetches the right one.
+15. **`vocab_tree_matcher` needs a feature cap, and the tree format must
+   match the build.** With all ~10k features per image it indexed 3,324
+   images for 70 min and then aborted (`std::bad_alloc`) generating pairs;
+   `--VocabTreeMatching.max_num_features 500` (retrieval only — matching
+   still uses every descriptor) finished the same job in 25 min. Our 3.11.1
+   is a FLANN build: it reads the classic `vocab_tree_flickr100K_*.bin`; the
+   `vocab_tree_faiss_*` files on the same release page make it die on load.
+   And do not pipe a long COLMAP run through `grep | tail` in a `set -e`
+   script — the error message is exactly what the filter drops.
 16. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a

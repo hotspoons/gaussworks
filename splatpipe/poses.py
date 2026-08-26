@@ -187,12 +187,14 @@ def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
                   f"database) before mapping.", flush=True)
 
 
-# COLMAP >= 3.10 reads faiss-format trees; the demuc.de FLANN-era file makes
-# 3.11.1 abort with a core dump AFTER indexing every image (70 min on 3,324).
-VOCAB_TREE_URL = "https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin"
+# Two tree formats exist. Our COLMAP 3.11.1 is a FLANN build and reads the
+# classic file; the faiss-format file (for faiss builds, 3.12+) makes it die
+# with std::bad_alloc on load. Both are on the 3.11.1 release page.
+VOCAB_TREE_URL = "https://github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_flickr100K_words256K.bin"
 
 
-def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50) -> None:
+def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50,
+                      max_num_features: int = 500) -> None:
     """Loop-closure matching by image retrieval: pairs that LOOK alike, wherever
     GPS says they are.
 
@@ -205,9 +207,15 @@ def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50) -> None:
     the GPS thinks an image is. Matches accumulate in the database, so this
     is additive to spatial + sequential. The tree lives on the PVC and is
     fetched once ($COLMAP_VOCAB_TREE overrides the path).
+
+    max_num_features caps the features used for RETRIEVAL only (matching
+    still uses every descriptor in the database). With the full ~10k per
+    image, 3,324 images indexed for 70 minutes and then the pair generation
+    aborted with std::bad_alloc; at 500 the whole pass took 25 minutes and
+    finished. Retrieval does not need more than that to find the same street.
     """
     tree = Path(os.environ.get("COLMAP_VOCAB_TREE",
-                               "/workspace/opt/colmap-vocab/vocab_tree_faiss_flickr100K_words256K.bin"))
+                               "/workspace/opt/colmap-vocab/vocab_tree_flickr100K_words256K.bin"))
     if not tree.exists():
         tree.parent.mkdir(parents=True, exist_ok=True)
         print(f"[poses] fetching vocabulary tree -> {tree}", flush=True)
@@ -215,6 +223,7 @@ def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50) -> None:
     _run(["colmap", "vocab_tree_matcher", "--database_path", str(db),
           "--VocabTreeMatching.vocab_tree_path", str(tree),
           "--VocabTreeMatching.num_images", str(num_images),
+          "--VocabTreeMatching.max_num_features", str(max_num_features),
           "--SiftMatching.use_gpu", gpu])
 
 
