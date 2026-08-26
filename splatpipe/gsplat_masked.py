@@ -14,12 +14,52 @@ and then hand argv straight to `simple_trainer`, so we inherit its CLI and stay
 out of its way.
 """
 
+import os
 import runpy
+import shutil
 import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+def _install_loader_patch():
+    """Size the DataLoader to the container's /dev/shm.
+
+    Worker processes hand batches back through shared memory, and one
+    1920x1440 float image is 33 MB; the reference trainer keeps 4 workers x
+    2 prefetched batches in flight, so a pod with the default 64 MB /dev/shm
+    (this one: read-only, cannot be remounted) dies at step 0 with
+    "DataLoader worker exited unexpectedly". Below 1 GB of shm, load in the
+    main process instead -- a JPEG decode per step, ~10-15% slower on an
+    A100, and it finishes. SPLATPIPE_LOADER_WORKERS overrides either way.
+    The real fix is a Memory-backed emptyDir on /dev/shm in the pod spec, as
+    deploy/devpod.yaml already does.
+    """
+    try:
+        shm_mb = shutil.disk_usage("/dev/shm").total >> 20
+    except OSError:
+        shm_mb = 0
+    want = os.environ.get("SPLATPIPE_LOADER_WORKERS")
+    if want is None and shm_mb >= 1024:
+        return
+    workers = int(want) if want is not None else 0
+    import torch.utils.data as tud                  # noqa: PLC0415
+
+    original = tud.DataLoader.__init__
+
+    def patched(self, *args, **kwargs):
+        if "num_workers" in kwargs and kwargs["num_workers"] != workers:
+            kwargs["num_workers"] = workers
+            if workers == 0:
+                kwargs.pop("persistent_workers", None)
+                kwargs.pop("prefetch_factor", None)
+        original(self, *args, **kwargs)
+
+    tud.DataLoader.__init__ = patched
+    print(f"[masked] /dev/shm is {shm_mb} MB: DataLoader workers -> {workers}",
+          flush=True)
 
 
 def _install_mask_patch(examples: Path):
@@ -69,6 +109,7 @@ def _install_mask_patch(examples: Path):
 
 def main():
     examples = Path(sys.argv[1])
+    _install_loader_patch()
     _install_mask_patch(examples)
     sys.argv = [str(examples / "simple_trainer.py"), *sys.argv[2:]]
     runpy.run_path(str(examples / "simple_trainer.py"), run_name="__main__")
