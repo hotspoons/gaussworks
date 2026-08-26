@@ -118,6 +118,75 @@ def _db_reusable(db: Path, chunk: Path) -> bool:
     return True
 
 
+def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
+    """Print the verified-pair matrix between corridor passes; warn on a weak one.
+
+    A locality fence is not a road. On the street run a 150 m fence around the
+    house took in a pass on a *different* street 89 m away: 179 + 81 verified
+    pairs to the other passes, against 10,304 between two passes of the same
+    road. GLOMAP produces exactly one model, so it hung that pass on the few
+    pairs it had and bent the whole reconstruction (one flat road came out at
+    z = 35 / 39 / 48 / 38 m per pass). The matrix makes that visible BEFORE
+    the mapper spends an hour on it. Diagnostic only: splitting is a chunking
+    decision, so this prints what to do rather than doing it.
+    """
+    cor_path = chunk / "corridor.json"
+    if not cor_path.exists():
+        return
+    passes = json.loads(cor_path.read_text()).get("passes") or []
+    if len(passes) < 2:
+        return
+    ranges = [tuple(p["seq_range"]) for p in passes]
+
+    def pass_of(name: str) -> int:
+        try:
+            seq = int(Path(name).stem)
+        except ValueError:
+            return -1
+        for i, (a, b) in enumerate(ranges):
+            if a <= seq <= b:
+                return i
+        return -1
+
+    n = len(ranges)
+    mat = [[0] * n for _ in range(n)]
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            owner = {i: pass_of(name) for i, name in
+                     con.execute("SELECT image_id, name FROM images")}
+            for (pid,) in con.execute(
+                    "SELECT pair_id FROM two_view_geometries WHERE rows > 15"):
+                i2 = pid % 2147483647
+                i1 = (pid - i2) // 2147483647
+                a, b = owner.get(i1, -1), owner.get(i2, -1)
+                if a < 0 or b < 0:
+                    continue
+                a, b = min(a, b), max(a, b)
+                mat[a][b] += 1
+                if a != b:
+                    mat[b][a] += 1
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        print(f"[poses] {chunk.name}: connectivity check skipped ({exc})", flush=True)
+        return
+    print(f"[poses] {chunk.name}: verified pairs (>15 inliers) by corridor pass:", flush=True)
+    for i, p in enumerate(passes):
+        cells = " ".join(f"{mat[i][j]:7d}" for j in range(n))
+        print(f"[poses]   pass {i} {p.get('video')} seq {ranges[i][0]}-{ranges[i][1]}: {cells}",
+              flush=True)
+    for i in range(n):
+        cross = sum(mat[i][j] for j in range(n) if j != i)
+        if mat[i][i] and cross < weak_ratio * mat[i][i]:
+            print(f"[poses] WARNING {chunk.name}: pass {i} shares only {cross} verified "
+                  f"pairs with the other passes ({mat[i][i]} within itself). It is "
+                  f"probably a different road inside the fence. A global mapper will "
+                  f"place it by those few pairs and can bend the whole model; give it "
+                  f"its own chunk (smaller --cell-m or --radius-m, or prune it from the "
+                  f"database) before mapping.", flush=True)
+
+
 def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
                 use_gpu: bool = True, spatial_radius: int = 4,
                 refresh: bool = False, mapper: str = "auto"):
@@ -134,6 +203,7 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
 
     gpu = "1" if use_gpu else "0"
     if reuse:
+        _pass_connectivity(chunk, db)
         _map_and_align(chunk, db, sparse, align, mapper)
         return
 
@@ -209,7 +279,8 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
               "--SequentialMatching.overlap", "15",
               "--SiftMatching.use_gpu", gpu])
 
-    _map_and_align(chunk, db, sparse, align)
+    _pass_connectivity(chunk, db)
+    _map_and_align(chunk, db, sparse, align, mapper)
 
 
 def _pick_mapper(mapper: str) -> str:
