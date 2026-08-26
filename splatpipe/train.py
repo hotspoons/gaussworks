@@ -47,7 +47,7 @@ def _ensure_point_colours(chunk: Path) -> None:
         pts = list(rec.points3D.values())
         if not pts:
             return
-        black = sum(1 for pt in pts if sum(pt.color) == 0) / len(pts)
+        black = sum(1 for pt in pts if not any(int(c) for c in pt.color)) / len(pts)
     except Exception as exc:                          # noqa: BLE001
         print(f"[train] {chunk.name}: could not inspect point colours ({exc})", flush=True)
         return
@@ -60,7 +60,7 @@ def _ensure_point_colours(chunk: Path) -> None:
     subprocess.run(["colmap", "color_extractor", "--image_path", str(chunk / "images"),
                     "--input_path", str(sparse), "--output_path", str(tmp)], check=True)
     rec = pycolmap.Reconstruction(str(tmp))
-    still = sum(1 for pt in rec.points3D.values() if sum(pt.color) == 0) / max(1, rec.num_points3D())
+    still = sum(1 for pt in rec.points3D.values() if not any(int(c) for c in pt.color)) / max(1, rec.num_points3D())
     if still >= 0.5:
         raise SystemExit(f"[train] {chunk.name}: points are still {still:.0%} black after "
                          f"color_extractor -- are the images readable at {chunk / 'images'}?")
