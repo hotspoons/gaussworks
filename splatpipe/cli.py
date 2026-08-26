@@ -101,6 +101,11 @@ def main():
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--steps", type=int, default=30000)
     s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
+    s.add_argument("--preset", default="default",
+                   help="gsplat trainer config: default (ADC densification) or "
+                        "mcmc (relocation up to --strategy.cap-max gaussians)")
+    s.add_argument("--tag", help="write to splat_<tag>/ with its own queue stage, "
+                                 "so experiments sit beside the baseline run")
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
 
     s = sub.add_parser("verify", help="eyeball a new camera/format: EAC layout, GPS, views")
@@ -275,7 +280,8 @@ def main():
 
     elif args.cmd == "train":
         from .train import train_all
-        train_all(args.chunks, steps=args.steps, extra=args.extra, only=args.only)
+        train_all(args.chunks, steps=args.steps, extra=args.extra, only=args.only,
+                  preset=args.preset, tag=args.tag)
 
     elif args.cmd == "verify":
         from .verify import verify

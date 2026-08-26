@@ -24,8 +24,12 @@ from .poses import list_chunks
 from .workqueue import WorkQueue
 
 
-def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
-    result = chunk / "splat"
+def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str],
+                preset: str = "default", tag: str | None = None):
+    # `tag` keeps experiments side by side: splat_<tag>/ next to splat/, and
+    # its own queue stage, so "one change at a time" comparisons never
+    # overwrite the run they are being compared against
+    result = chunk / (f"splat_{tag}" if tag else "splat")
     if list(result.glob("**/*.ply")):
         print(f"[train] {chunk.name}: ply exists, skipping")
         return
@@ -36,7 +40,7 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
     masked = (chunk / "masks").is_dir()
     entry = (["-m", "splatpipe.gsplat_masked", str(examples)]
              if masked else [str(examples / "simple_trainer.py")])
-    cmd = [sys.executable, *entry, "default",
+    cmd = [sys.executable, *entry, preset,
            "--data-dir", str(chunk), "--data-factor", "1",
            "--result-dir", str(result), "--max-steps", str(steps),
            "--save-ply", "--disable-viewer",
@@ -51,7 +55,8 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str]):
 
 
 def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = None,
-              only: list[str] | None = None):
+              only: list[str] | None = None, preset: str = "default",
+              tag: str | None = None):
     examples = Path(os.environ.get("GSPLAT_EXAMPLES", "/opt/gsplat/examples"))
     if not (examples / "simple_trainer.py").exists():
         raise SystemExit(f"gsplat examples not found at {examples} (set GSPLAT_EXAMPLES)")
@@ -59,9 +64,11 @@ def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = No
     if only:
         ready = [c for c in ready if any(o in c.name for o in only)]
         print(f"[train] --only {only}: {len(ready)} chunk(s)")
-    q = WorkQueue(chunks_dir, "train")
-    print(f"[train] worker {q.worker}: {len(ready)} posed chunk(s) in the pool")
-    done, failed = q.run(ready, lambda c: train_chunk(c, examples, steps, extra or []))
+    q = WorkQueue(chunks_dir, f"train_{tag}" if tag else "train")
+    print(f"[train] worker {q.worker}: {len(ready)} posed chunk(s) in the pool"
+          + (f" (preset {preset}, tag {tag})" if tag or preset != "default" else ""))
+    done, failed = q.run(ready, lambda c: train_chunk(c, examples, steps, extra or [],
+                                                      preset=preset, tag=tag))
     print(f"[train] worker {q.worker}: trained {len(done)}, failed {len(failed)}")
     if failed:
         raise SystemExit(f"[train] failed chunks: {failed}")
