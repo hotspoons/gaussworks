@@ -332,6 +332,14 @@ def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool,
               "against 73 min for all the GPU stages combined)", flush=True)
         mapper = ["colmap", "mapper", "--database_path", str(db),
                   "--image_path", str(chunk / "images"), "--output_path", str(raw)]
+        if (chunk / "cameras.json").exists():
+            # Our views are synthesised pinholes: fx/fy/cx/cy are EXACT, and
+            # letting BA "refine" them is how a long road bends. GLOMAP 1.0.0
+            # cannot be told this (it drifted 1144.1 -> 1142..1155 on the
+            # street) -- the incremental mapper can.
+            mapper += ["--Mapper.ba_refine_focal_length", "0",
+                       "--Mapper.ba_refine_principal_point", "0",
+                       "--Mapper.ba_refine_extra_params", "0"]
         if _ba_gpu_available():
             mapper += ["--Mapper.ba_use_gpu", "1"]
             print("[poses] ceres has CUDA: bundle adjustment on GPU", flush=True)
