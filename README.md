@@ -10,6 +10,21 @@ justfile, package, and container; Apache-2.0 (see LICENSE and THIRD_PARTY.md).
 Outputs are geo-aligned (ENU), so they can eventually feed trailworks as a
 detail layer.
 
+## Two targets
+
+**Drivable stages.** Car-mounted 360 capture of Maryland back roads → a
+geo-aligned splat world → mesh/export for a moddable racing sim (Assetto Corsa
+first). Everything measured in this repo so far comes from this path.
+
+**Trail previews for trailworks.** The same pipeline, walked instead of
+driven: a 360 camera on a backpack pole, and a railed browser flythrough so
+someone can preview a trail before driving to the trailhead. The corridor
+machinery already serves it — `guardrail.py` clamps a camera to the observed
+path, and for a trail *the rail is the trail*. Not yet attempted; the capture
+deltas, the canopy-GPS risk, the three.js renderer options and the open UX
+question are worked out in [docs/TRAILVIEW.md](docs/TRAILVIEW.md), with a
+starting config in `configs/trail.yaml`.
+
 ## Pipeline
 
 ```

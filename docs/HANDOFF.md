@@ -14,9 +14,18 @@ things that have already cost hours, and most of them are not guessable.
 
 ### 1.1 What this is
 
-`gaussworks` turns car-mounted 360 video into a chunked, geo-aligned gaussian
-splat world, aimed at building drivable racing-game stages from real Maryland
-back roads. Five stages, each a plain CLI over files on disk:
+`gaussworks` turns 360 video into a chunked, geo-aligned gaussian splat world.
+**Two targets, one pipeline:**
+
+- **drivable racing-game stages** from car-mounted capture of Maryland back
+  roads — every measurement in this repo comes from this path;
+- **trail previews for trailworks** — the same pipeline walked rather than
+  driven, ending in a railed browser flythrough of a hiking trail. Not yet
+  attempted. Capture deltas, the canopy-GPS risk most likely to sink a first
+  attempt, renderer options and the open UX question are in
+  [TRAILVIEW.md](TRAILVIEW.md); `configs/trail.yaml` is the starting point.
+
+Five stages, each a plain CLI over files on disk:
 
 ```
 ingest → chunk → poses → train → merge     (then: mesh / export / drive / eval)
@@ -195,6 +204,12 @@ with a `sensor_from_rig` transform per camera. Populating it would:
 `splatpipe/writer.py` already records each camera's `yaw`, `pitch` and `lens`
 in `cameras.json`, so the transforms are a short computation away. This needs
 COLMAP 3.12+ across the toolchain.
+
+**Open — the trail target.** Nothing has been walked yet. The highest-value
+unknown is whether canopy GPS (5–20 m under tree cover, against sub-metre in
+the open) breaks locality chunking badly enough to require chunking by
+along-track distance instead of by grid. One 200–300 m wooded out-and-back at
+Tier 1 scale answers it. See [TRAILVIEW.md](TRAILVIEW.md).
 
 **Open.** Whether per-lens planning beats 23.07 dB. Road crown needs a second,
 lower physical camera — no software fix exists, every lens is at one roof
