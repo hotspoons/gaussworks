@@ -20,8 +20,8 @@ network around Bacon Ridge are ridden and hiked by the same people.
 
 The pipeline is the same pipeline. What differs is capture geometry, sampling
 density, and where the GPS goes wrong — plus a viewer that does not exist yet.
-This note is the design work done up front so the first walking capture is not
-wasted.
+This note is the design work done up front so the first trail capture, on
+either, is not wasted.
 
 ## Why the existing pieces already fit
 
@@ -134,22 +134,6 @@ is measured **against the world, not the camera body**. That would:
 This is the single highest-leverage unimplemented feature for the trail target,
 and it is not trail-specific.
 
-### Sampling density scales with scene distance, not speed
-
-The instinct is to sample less often because walking is slower. That is
-backwards.
-
-Frame spacing has to keep enough overlap between consecutive views for feature
-matching, and how much a view changes per metre travelled depends on **how far
-away the scene is**. A road capture looks at surfaces 5–30 m out; a trail looks
-at foliage 1–3 m out. The same metre of travel moves the trail scene several
-times as much.
-
-So `spacing_m` goes *down* for trails (0.5–0.75 m against 1.25 m on road), even
-though the camera is moving at a seventh of the speed. `extract_fps` can come
-down instead, since at 1.4 m/s even 8 fps puts candidates 0.18 m apart — still
-several to pick the sharpest from per window. See `configs/trail.yaml`.
-
 ### GPS under canopy is the real risk
 
 This is the part most likely to sink a first attempt. Tree cover degrades a
@@ -243,10 +227,11 @@ an attachment on an explorer page, or a first-class entity that pages link to.
 The second is probably right if renderings are ever shared between pages (a
 trail that appears in several areas), but the first is much less work.
 
-## Suggested first walking capture
+## Suggested first captures
 
 Small and boring on purpose, to shake out mount, masking and canopy GPS before
-committing to a real trail:
+committing to a real trail. Do the hike first — it is the slower, more
+forgiving mode, and it gives the bike run something to be compared against:
 
 - 200–300 m of a wooded path, out and back, backpack pole, stabilization off,
   shutter locked fast
