@@ -196,7 +196,7 @@ the first ~100 m (trap 13). Data lives in `/workspace/data/street{A,B,B13}`.
 | A2 — same, `--preset mcmc --strategy.cap-max 2000000` | " | " | 48 min | 15.66 dB | 2,000,000 |
 | A3 — same, `--strategy.absgrad --strategy.grow-grad2d 0.0008` | " | " | 80 min | 17.45 dB | 263,133 |
 | A4 — same, `--strategy.grow-grad2d 0.0001` | " | " | 106 min | 17.55 dB | 512,304 |
-| A5 — exact repeat of A under `--tag repro` (determinism control) | " | " | (see logs/trainA5.log) | | |
+| A5 — exact repeat of A under `--tag repro` (determinism control) | " | " | 105 min | **21.32 dB** | 429,801 |
 | B — all four passes, `--near … --radius-m 150` | 4,194 (100% reg., 0.78 px) | GLOMAP 88 min | not trained | alignment 39 m: **bent world** | |
 | B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 (100%, 0.80 px) | GLOMAP 64 min | not trained | alignment 15.5 m: **still bent** (passes 9.7 m apart, z std 3–7 m) | |
 | B13 re-BA — exact intrinsics reset, `bundle_adjuster` refine off | " | +35 min | | unchanged: 0.80 px and still bent → not an intrinsics problem | |
@@ -226,11 +226,20 @@ What those taught:
   −5.6 dB (its 2M gaussians ended up nowhere near the scene), absgrad
   −3.8 dB, denser ADC −3.7 dB. All three land at ~17.5 dB with a translucent
   veil over every view, and are already 3.4 dB behind at step 7k — a fragile
-  optimum, not a density story. The trainer is seeded (42), so A5 repeats A's
-  exact config to confirm determinism; if A5 matches A, the next single
-  changes are the stabilisers: `--strategy.prune-scale3d 0.02` (on this
-  un-normalised metric scene the default keeps gaussians up to 10.5 m) and
-  `--random-bkgd`.
+  optimum, not a density story. A5 (identical config) reproduces A to 0.1 dB
+  and ±80 gaussians, so training is deterministic: the default recipe
+  reliably finds the good basin and each one-knob neighbour reliably finds
+  the bad one. Post-hoc ablation on the bad models (drop gaussians within
+  1.5–4 m of any camera, or larger than 5 m) makes them WORSE, so the veil is
+  not a handful of near-camera floaters; the whole model is under-fit.
+  **Open question**, parked deliberately: the default ADC recipe is the
+  training recipe until someone explains the basin. Candidates to test one
+  at a time, in order: `--strategy.prune-scale3d 0.02` (this is an
+  un-normalised metric scene, `scene_scale` 105 m, so the default keeps
+  gaussians up to 10.5 m), `--random-bkgd`, `--strategy.reset-every 1500`,
+  and running with `--steps 60000` to see whether the bad basin is just
+  slower. Compare at step 7k first — the split is already 3.4 dB there,
+  which makes the experiment 15 min instead of 100.
 - **The incremental mapper with fixed intrinsics beats GLOMAP 1.0.0 on
   multi-pass data** (B13c vs B13): passes 1.2 m apart instead of 9 m, at the
   cost of 3.5 h vs 1 h. Loop-closure matching (B13v, `--loop-closure vocab`)
