@@ -62,6 +62,7 @@ corridor:
   height_margin_m: 5
   min_spacing_m: 3
   gap_m: 20
+  gap_s: 30            # or a jump in video time: leaving and re-entering a fence
 
 poses:
   # Spatial matching leans on GPS priors, which canopy degrades badly. The

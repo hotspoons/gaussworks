@@ -47,6 +47,7 @@ corridor:
   height_margin_m: 8
   min_spacing_m: 5      # polyline decimation
   gap_m: 30             # jump that splits one pass from the next
+  gap_s: 30            # or a jump in video time: leaving and re-entering a fence
 
 poses:
   matcher: spatial          # GPS priors from EXIF; handles both-direction passes

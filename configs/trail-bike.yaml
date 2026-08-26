@@ -62,6 +62,7 @@ corridor:
   height_margin_m: 6       # a little more: jumps, berms, drops
   min_spacing_m: 3
   gap_m: 25
+  gap_s: 30            # or a jump in video time: leaving and re-entering a fence
 
 poses:
   # Same canopy-GPS problem as hiking, and worse coverage per fix at speed.

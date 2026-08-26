@@ -17,13 +17,19 @@ from different chunks compose into one world.
 from .geo import ll_to_enu
 
 
-def _runs(frames, origin, gap_m):
+def _runs(frames, origin, gap_m, gap_s=30.0):
     """Split a chunk's frames into contiguous camera passes.
 
     A chunk gathers frames from every pass through its cell, so the points are
     not one path: they are several, and consecutive frames in the file can be
     minutes and hundreds of metres apart. Cut wherever the jump is too large
     to be one continuous drive, and keep passes from different videos apart.
+
+    Distance alone is not enough. A `--near` fence is left and re-entered on
+    the same road, so the last frame of one visit and the first of the next
+    can be metres apart in space and minutes apart in time: the street run's
+    three visits in one chapter collapsed into a single "pass" that way. A
+    jump in video time (`t`) larger than gap_s is a new pass too.
     """
     lat0, lon0 = origin
     out, cur, prev = [], [], None
@@ -34,7 +40,9 @@ def _runs(frames, origin, gap_m):
         if prev is not None:
             far = ((x - prev[0]) ** 2 + (y - prev[1]) ** 2) ** 0.5 > gap_m
             other_video = f.get("video") != prev[3].get("video")
-            if far or other_video:
+            t0, t1 = prev[3].get("t"), f.get("t")
+            late = t0 is not None and t1 is not None and abs(t1 - t0) > gap_s
+            if far or other_video or late:
                 out.append(cur)
                 cur = []
         cur.append(pt)
@@ -58,10 +66,10 @@ def _decimate(points, min_spacing_m):
 
 
 def build(frames, origin, radius_m=25.0, height_margin_m=8.0,
-          min_spacing_m=5.0, gap_m=30.0) -> dict:
+          min_spacing_m=5.0, gap_m=30.0, gap_s=30.0) -> dict:
     """Corridor for one chunk's frames. `origin` is the world (lat, lon)."""
     passes = []
-    for run in _runs(frames, origin, gap_m):
+    for run in _runs(frames, origin, gap_m, gap_s):
         pts = _decimate(run, min_spacing_m)
         if len(pts) < 2:
             continue
