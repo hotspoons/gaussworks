@@ -393,7 +393,17 @@ that will bite a fresh pod:
    `corridor.json` from the solved cameras, so drive/merge/export use the
    truth; but chunking and spatial-matching priors still come from GPS, so
    power the camera on and let it settle in the open before recording.
-14. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
+14. **Black SfM points are a dead training initialisation.** gsplat colours
+   every gaussian from its point; all-black points render black everywhere,
+   so the gradient through opacity and position (proportional to colour) is
+   exactly zero and colour gradients are ~1e-7: 7k steps, 0 gaussians
+   densified, PSNR 9.7 dB, loss stuck at the image mean. COLMAP extracts
+   colours at the end of mapping and fails silently if it cannot read the
+   images -- a chunk copied without its `images/` target (relative symlinks)
+   did exactly that. `train` now refuses a >50% black cloud and runs
+   `color_extractor` first; check with `pose-check.py`-style inspection of
+   `points3D` colours if a run ever sits at a flat loss.
+15. **Python buffers stdout under `nohup`.** A log that is 0 bytes for 30 minutes
    is usually buffering, and COLMAP writes straight to the fd — so unflushed
    Python lines land long after the subprocess output they label. This made a
    correctly-applied fix look like it had never run. `flush=True` everywhere.

@@ -16,12 +16,61 @@ at a time and rebalances automatically; a single GPU works identically.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from .poses import list_chunks
 from .workqueue import WorkQueue
+
+
+def _ensure_point_colours(chunk: Path) -> None:
+    """Refuse to train from a black point cloud; recolour it first if we can.
+
+    gsplat initialises every gaussian's colour from its SfM point. If the
+    points are all black, the render is black everywhere, so the gradient
+    through opacity and position (proportional to colour) is identically zero
+    and the colour gradient is ~1e-7 per gaussian: the optimiser never moves,
+    the loss sits at the image mean, and 30k steps produce the init. COLMAP
+    extracts point colours from the images at the end of mapping and fails
+    SILENTLY when it cannot read them -- which is exactly what happened when a
+    chunk was mapped while its image symlinks were dangling. Measured: 0
+    gaussians densified in 7k steps, PSNR 9.7 dB.
+    """
+    sparse = chunk / "sparse" / "0"
+    if not (sparse / "points3D.bin").exists():
+        return
+    try:
+        import pycolmap                              # noqa: PLC0415
+        rec = pycolmap.Reconstruction(str(sparse))
+        pts = list(rec.points3D.values())
+        if not pts:
+            return
+        black = sum(1 for pt in pts if sum(pt.color) == 0) / len(pts)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"[train] {chunk.name}: could not inspect point colours ({exc})", flush=True)
+        return
+    if black < 0.5:
+        return
+    print(f"[train] {chunk.name}: {black:.0%} of SfM points are black -- a dead "
+          f"initialisation. Re-extracting colours from the images.", flush=True)
+    tmp = chunk / "sparse" / "0_recolor"
+    tmp.mkdir(exist_ok=True)
+    subprocess.run(["colmap", "color_extractor", "--image_path", str(chunk / "images"),
+                    "--input_path", str(sparse), "--output_path", str(tmp)], check=True)
+    rec = pycolmap.Reconstruction(str(tmp))
+    still = sum(1 for pt in rec.points3D.values() if sum(pt.color) == 0) / max(1, rec.num_points3D())
+    if still >= 0.5:
+        raise SystemExit(f"[train] {chunk.name}: points are still {still:.0%} black after "
+                         f"color_extractor -- are the images readable at {chunk / 'images'}?")
+    backup = chunk / "sparse" / "0_black"
+    if backup.exists():
+        shutil.rmtree(backup)
+    sparse.rename(backup)
+    tmp.rename(sparse)
+    print(f"[train] {chunk.name}: recoloured ({still:.0%} black); old model kept at {backup}",
+          flush=True)
 
 
 def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str],
@@ -33,6 +82,7 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str],
     if list(result.glob("**/*.ply")):
         print(f"[train] {chunk.name}: ply exists, skipping")
         return
+    _ensure_point_colours(chunk)
     env = dict(os.environ)
     env.setdefault("CUDA_VISIBLE_DEVICES", os.environ.get("LOCAL_RANK", "0"))
     # route through our wrapper when masks exist, so the rig is excluded from
