@@ -27,6 +27,7 @@ same for every camera:
 
 import datetime as dt
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -266,13 +267,32 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                 # shift the selection
                 gdist = np.array(track_distances(list(glat), list(glon)))
             centre = (near[0], near[1], 0.0) if near else None
+            if centre is not None and gps:
+                # distance of every GPS sample from the point of interest, so
+                # whole segments the car never came near can be skipped
+                # without decoding them. A --near filter over three 8K
+                # chapters is otherwise decode-bound on footage it will throw
+                # away: the filter used to run AFTER extraction.
+                gnear = np.array([math.hypot(*ll_to_enu(la, lo, 0.0, centre)[:2])
+                                  for la, lo in zip(glat, glon)])
             maps = driver.ffmpeg_maps()
 
             end_s = start_s + duration_s if duration_s else video_duration(video)
             next_d, kept_here, seen_here = 0.0, 0, 0
             seg_start = start_s
+            skipped_s = 0.0
             while seg_start < end_s - 1e-3:
                 seg_len = min(segment_s, end_s - seg_start)
+                if centre is not None and gps:
+                    # GPS is ~10 Hz and interpolated per candidate, so a
+                    # segment whose nearest sample (with a little slack for
+                    # the interpolation and the segment edges) is beyond the
+                    # radius cannot contribute a frame. Skip the decode.
+                    sel = (gt >= seg_start - 1.0) & (gt <= seg_start + seg_len + 1.0)
+                    if not sel.any() or gnear[sel].min() > radius_m + 25.0:
+                        seg_start += seg_len
+                        skipped_s += seg_len
+                        continue
                 with tempfile.TemporaryDirectory(dir=out, prefix=".cand-") as td:
                     cands = extract_candidates_multi(video, Path(td), extract_fps,
                                                      maps, hwaccel=hwaccel,
@@ -328,7 +348,10 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                 print(f"[ingest] {video.name}: {seg_start - start_s:6.0f}s / "
                       f"{end_s - start_s:.0f}s, kept {kept_here}", flush=True)
             print(f"[ingest] {video.name}: gps_samples={len(gps)} "
-                  f"candidates={seen_here} kept={kept_here}", flush=True)
+                  f"candidates={seen_here} kept={kept_here}"
+                  + (f" (skipped {skipped_s:.0f}s of footage outside "
+                     f"--near/--radius-m without decoding)" if skipped_s else ""),
+                  flush=True)
     finally:
         writer.close()
     return out

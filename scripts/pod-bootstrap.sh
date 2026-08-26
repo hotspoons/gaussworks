@@ -1,56 +1,68 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Recover a dev pod after a container restart. Everything durable lives on the
-# PVC (/workspace: venv, wheels, COLMAP at /workspace/opt/sfm, data, repos);
-# this reinstalls only the ephemeral container-fs bits and wires the PATH.
+# Recover a dev pod after a container restart -- seconds, offline-capable.
+#
+# Everything durable lives on the PVC (/workspace): CUDA toolkit, venv (with
+# torch), COLMAP/GLOMAP + their bundled shared libs, exiftool, gsplat, repos,
+# caches, and a .deb cache. The container filesystem (home dir, apt state,
+# ~/.bashrc, ~/.claude) is thrown away on every restart. This script puts back
+# the few ephemeral bits and wires every shell to /workspace/env.sh.
+#
+# Fresh PVC? Run scripts/pod-build-stack.sh instead (this is called at its end).
 set -euo pipefail
 
 sudo chown "$(id -u):$(id -g)" /workspace 2>/dev/null || true
-sudo apt-get update -qq
-# Everything here lives on the CONTAINER filesystem, so it vanishes on every
-# restart while /workspace survives -- including the shared libraries the
-# PVC-installed COLMAP was linked against. Reinstalling them is most of what
-# this script is for.
-sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl \
-    libx11-6 libgl1 libgomp1 \
-    libopengl0 libglew2.2 libfreeimage3 libmetis5 libceres4 \
-    libboost-program-options1.83.0 libboost-graph1.83.0 \
-    libgoogle-glog0v6 libgflags2.2 libflann1.9 libsuitesparse-dev \
-    || sudo apt-get install -y -qq ffmpeg libimage-exiftool-perl \
-        libx11-6 libgl1 libgomp1 libopengl0 libglew2.2 libfreeimage3 \
-        libmetis5 libgoogle-glog0v6 libgflags2.2   # older/newer name drift
+mkdir -p /workspace/logs /workspace/bin
 
-if [ ! -d /workspace/venv ]; then
-    python -m venv --system-site-packages /workspace/venv
+# --- 1. persistent environment, sourced by every shell -----------------------
+if [ ! -f /workspace/env.sh ]; then
+    cp "$(dirname "$0")/env.sh" /workspace/env.sh
 fi
+grep -q 'source /workspace/env.sh' ~/.bashrc 2>/dev/null \
+    || echo '[ -f /workspace/env.sh ] && source /workspace/env.sh' >> ~/.bashrc
 # shellcheck disable=SC1091
-source /workspace/venv/bin/activate
-export PIP_CACHE_DIR=/workspace/.pip-cache
-export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions   # gsplat JITs CUDA ops at first import; keep the cache on the PVC
+source /workspace/env.sh
 
-# fast path: prebuilt wheels cached on the PVC (see README dev-pod section)
-if ls /workspace/wheels/*.whl >/dev/null 2>&1; then
-    pip install -q /workspace/wheels/*.whl
+# --- 2. apt packages, from the PVC .deb cache when possible -------------------
+# ffmpeg (with NVDEC) and the build tools live on the container fs. The COLMAP
+# and GLOMAP binaries carry their own shared libs in /workspace/opt/sfm/lib/
+# bundled (see pod-build-stack.sh), so they do not need apt at all any more.
+PKGS="ffmpeg rsync tmux cmake ninja-build build-essential git
+      libboost-program-options-dev libboost-graph-dev libboost-system-dev
+      libboost-filesystem-dev libboost-test-dev libeigen3-dev libfreeimage-dev
+      libmetis-dev libgoogle-glog-dev libgflags-dev libsqlite3-dev libceres-dev
+      libflann-dev libsuitesparse-dev libcgal-dev libglew-dev"
+CACHE=/workspace/apt-cache/archives
+if ! command -v ffmpeg >/dev/null || ! command -v cmake >/dev/null; then
+    if ls "$CACHE"/*.deb >/dev/null 2>&1; then
+        # offline fast path: every dependency was cached on the PVC at build time
+        sudo dpkg -i --force-depends "$CACHE"/*.deb >/workspace/logs/dpkg.log 2>&1 \
+            || echo "[pod-bootstrap] dpkg had complaints (see logs/dpkg.log); fixing up via apt"
+    fi
+    sudo apt-get update -qq || true
+    # shellcheck disable=SC2086
+    sudo apt-get install -y -qq -o Dir::Cache::archives="$CACHE" $PKGS
+    sudo chown -R "$(id -u):$(id -g)" /workspace/apt-cache 2>/dev/null || true
 fi
-pip install -q -e /workspace/gaussworks
 
-
-# ExifTool: the distro package is too old. GoPro switched the GPMF GPS payload
-# from GPS5 to GPS9 with the HERO11 generation (the MAX 2 writes GPS9), and an
-# exiftool without GPS9 support parses the file, reports every other stream,
-# and silently returns no GPS -- which downstream is indistinguishable from a
-# camera that never got a fix. Ubuntu 24.04 ships 12.76; we need 12.90+.
-EXIFTOOL_VERSION=13.44
-if [ ! -x /workspace/opt/exiftool/exiftool ]; then
-    mkdir -p /workspace/opt && cd /workspace/opt
-    curl -fsSL -o et.tgz "https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz"
-    rm -rf exiftool Image-ExifTool-* && tar xzf et.tgz && rm et.tgz
-    mv "Image-ExifTool-${EXIFTOOL_VERSION}" exiftool
+# --- 3. python: venv is on the PVC; just re-link the editable install ----------
+if [ -x /workspace/venv/bin/python ]; then
+    uv pip install -q --python /workspace/venv/bin/python -e /workspace/gaussworks 2>/dev/null \
+        || /workspace/venv/bin/pip install -q -e /workspace/gaussworks
+else
+    echo "[pod-bootstrap] no /workspace/venv -- run scripts/pod-build-stack.sh" >&2
 fi
 
-echo 'export PATH=/workspace/opt/exiftool:/workspace/opt/sfm/bin:$PATH' >> ~/.bashrc
-echo 'source /workspace/venv/bin/activate' >> ~/.bashrc
-echo 'export TORCH_EXTENSIONS_DIR=/workspace/.torch_extensions' >> ~/.bashrc
-export PATH=/workspace/opt/exiftool:/workspace/opt/sfm/bin:$PATH
-echo "[pod-bootstrap] done — colmap: $(command -v colmap || echo MISSING), \
-exiftool: $(exiftool -ver 2>/dev/null || echo MISSING), venv active"
+# --- 4. Claude Code state: restore from the PVC, then keep it synced ----------
+if [ -x /workspace/bin/claude-sync.sh ]; then
+    /workspace/bin/claude-sync.sh start
+fi
+
+# --- 5. report --------------------------------------------------------------------
+echo "[pod-bootstrap] done"
+echo "  nvcc:     $(command -v nvcc || echo MISSING)"
+echo "  colmap:   $(colmap -h 2>&1 | sed -n 2p || echo MISSING)"
+echo "  glomap:   $(glomap -h 2>&1 | sed -n 3p || echo MISSING)"
+echo "  exiftool: $(exiftool -ver 2>/dev/null || echo MISSING)  (GPS9 tags: $(exiftool -listx 2>/dev/null | grep -c GPS9))"
+echo "  ffmpeg:   $(ffmpeg -hide_banner -hwaccels 2>/dev/null | grep -c cuda) cuda hwaccel"
+echo "  python:   $(command -v python)  torch $(python -c 'import torch;print(torch.__version__)' 2>/dev/null || echo MISSING)"
