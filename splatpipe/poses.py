@@ -284,6 +284,13 @@ def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool,
               *ref_args, "--alignment_max_error", "3"])
     else:
         shutil.move(str(model), str(final))
+    # The GPS corridor got us here; the solved cameras are the truth now. Not
+    # fatal: a chunk without frame records just keeps the GPS corridor.
+    try:
+        from . import corridor as corridor_mod      # noqa: PLC0415
+        corridor_mod.refresh_from_sparse(chunk)
+    except Exception as exc:                        # noqa: BLE001
+        print(f"[poses] {chunk.name}: corridor refresh skipped ({exc})", flush=True)
     print(f"[poses] {chunk.name}: done -> {final}", flush=True)
 
 

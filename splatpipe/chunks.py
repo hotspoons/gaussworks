@@ -70,6 +70,10 @@ def _write_chunk(frames_dir: Path, chunk_dir: Path, members: list[dict],
     # gaussians) share a world, so merge is concatenation.
     if enu_lines:
         (chunk_dir / "geo_enu.txt").write_text("\n".join(enu_lines) + "\n")
+    # the chunk's own frame records (seq, t, video, GPS): what corridor
+    # rebuilding after poses needs, without reaching back into the ingest dir
+    (chunk_dir / "frames.jsonl").write_text(
+        "".join(json.dumps(f) + "\n" for f in members))
     if members and members[0].get("lat") is not None:
         (chunk_dir / "corridor.json").write_text(json.dumps(
             corridor_mod.build(members, origin, **corridor_cfg), indent=1))
