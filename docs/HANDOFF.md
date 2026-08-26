@@ -184,20 +184,42 @@ visible pixels only:
 PSNR when masks differ — gsplat zeroes masked pixels in the render but not the
 ground truth, worth ~4.5 dB here.
 
-**In flight at handoff** (2026-08-25 16:40 UTC). `/workspace/data/street2`, the
-first full run through the per-lens pipeline: 916 frames × 6 views = 5,496
-images, 4 chunks, both drive directions present in every cell.
+**The street, 2026-08-26 — first renders from the driveway.** The capture
+starts in the driveway at 2102 Arrowhead Farms Ct (38.98405, -76.69555). Within
+a 150 m fence of the house there are four passes: GS010002 0–60 s (out),
+168–205 s and 355–372 s, and GS030002 305–345 s (home). GPS is 15–19 m off for
+the first ~100 m (trap 13). Data lives in `/workspace/data/street{A,B,B13}`.
 
-The COLMAP incremental mapper reached **3,868 of 3,870 images registered
-(99.95%)** on `chunk_x0_y-1` — proof that the spatial-matching fix in trap 3
-works — and then the container restarted (trap 6) before it wrote its model,
-losing that mapping. Its `colmap.db` survived with 63,400 verified pairs, so
-`poses` was relaunched and will reuse it. All four chunks now map with GLOMAP.
+| Run | Images | Poses | Train | PSNR (visible, 121 views) | Gaussians |
+| --- | --- | --- | --- | --- | --- |
+| **A** — pass 1 only, `--start-s 0 --duration-s 60` | 1,014 (972 reg., 0.75 px) | GLOMAP 8 min | ADC default, masks, AA, 30k, 77 min | **21.22 dB** | 429,878 |
+| A2 — same, `--preset mcmc --strategy.cap-max 2000000` | " | " | 48 min | 15.66 dB | 2,000,000 |
+| A3 — same, `--strategy.absgrad --strategy.grow-grad2d 0.0008` | " | " | (see logs/trainA3.log) | | |
+| B — all four passes, `--near … --radius-m 150` | 4,194 (100% reg., 0.78 px) | GLOMAP 88 min | not trained | alignment 39 m: **bent world** | |
+| B13 — B minus pass 2 (pruned database, GLOMAP only) | 3,324 | (see logs/posesB13.log) | | | |
 
-**Training has not started, so there is no quality number for the per-lens
-change yet.** That is the first thing to finish: `splatpipe status --chunks
-/workspace/data/street2/chunks`, then `splatpipe eval` against 23.07 dB, then
-`splatpipe drive` for a flythrough.
+What those taught:
+
+- **The MCMC preset is a dead end on this data** (green mush at 2M
+  gaussians, −5.5 dB). It ships `init_opa 0.5, init_scale 0.1` and the
+  opacity/scale regularisers that already cost 1.2 dB in the earlier
+  measurements. Do not re-run it hoping for different numbers.
+- **A fence is not a road.** Pass 2 in B is a *different* street 89 m away
+  (GPS), sharing 179 + 81 verified pairs with the rest against 10,304 between
+  passes 0↔1. GLOMAP produces exactly one model, so it hung that pass on the
+  few pairs and bent everything: same flat road at z = 35 / 39 / 48 / 38 m per
+  pass. Check the cross-pass verified-pair matrix (`two_view_geometries`
+  grouped by corridor pass) before mapping a multi-pass chunk; a pass with
+  < ~1% of the pairs of its neighbours should be its own chunk. B13 is that
+  fix applied by pruning the pass out of the database (`data/streetB13`).
+- **Replay artefacts are not splat artefacts.** The first video looked wrong
+  at the start (the capture *backs down* a curved driveway for 24 m, so the
+  camera looked backwards) and snapped at the court's corner (5 m corridor
+  decimation). `drive` now trims initial reversals and takes its heading over
+  3 m of road; the SfM corridor keeps 1.5 m spacing.
+- The A model is good along the open street and blobby in the canopy and
+  near field; it is one pass at 4–5 m/s. Density (A3) and both-direction
+  coverage (B13) are the two levers being measured.
 
 **Next, and worth doing properly: declare the rig.** The GLOMAP failure above
 points at something real. Our six virtual cameras are not six independent
