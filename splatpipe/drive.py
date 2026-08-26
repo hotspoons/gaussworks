@@ -91,8 +91,12 @@ def render(chunk: Path, out: Path | None = None, ckpt: Path | None = None,
         raise SystemExit(f"{corridor_path}: no camera path to follow")
     if pass_index is not None:
         passes = [passes[pass_index]]
-    # longest pass first: that is the through-route rather than a stub
-    passes = sorted(passes, key=lambda p: -len(p["points"]))
+    else:
+        # longest pass first: that is the through-route rather than a stub
+        passes = sorted(passes, key=lambda p: -len(p["points"]))
+    p0 = passes[0]
+    print(f"[drive] corridor source={cor.get('source', 'gps')} pass video="
+          f"{p0.get('video')} seq={p0.get('seq_range')} ({len(p0['points'])} pts)", flush=True)
 
     if ckpt is None:
         ckpts = list((chunk / "splat" / "ckpts").glob("ckpt_*.pt"))

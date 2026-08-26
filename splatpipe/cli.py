@@ -149,6 +149,11 @@ def main():
     s.add_argument("--fps", type=int, default=30)
     s.add_argument("--height-offset-m", type=float, default=0.0,
                    help="raise/lower from the original lens height")
+    s.add_argument("--pass", dest="pass_index", type=int,
+                   help="render this corridor pass (0-based, in corridor.json "
+                        "order) instead of the longest one")
+    s.add_argument("--all-passes", action="store_true",
+                   help="render every pass, one video each (drive_passN.mp4)")
 
     s = sub.add_parser("route", help="corridor -> one driveable point-to-point stage")
     s.add_argument("--world", required=True, type=Path)
@@ -295,10 +300,17 @@ def main():
 
     elif args.cmd == "drive":
         from .drive import render
-        render(args.chunk, args.out, ckpt=args.ckpt, corridor=args.corridor,
-               width=args.width, height=args.height, fov_deg=args.fov,
-               spacing_m=args.spacing_m, fps=args.fps,
-               height_offset_m=args.height_offset_m)
+        kw = dict(ckpt=args.ckpt, corridor=args.corridor, width=args.width,
+                  height=args.height, fov_deg=args.fov, spacing_m=args.spacing_m,
+                  fps=args.fps, height_offset_m=args.height_offset_m)
+        if args.all_passes:
+            import json as _json
+            cor = _json.loads(Path(args.corridor or args.chunk / "corridor.json").read_text())
+            out = Path(args.out or args.chunk / "drive")
+            for i in range(len(cor.get("passes") or [])):
+                render(args.chunk, out / f"pass{i}", pass_index=i, **kw)
+        else:
+            render(args.chunk, args.out, pass_index=args.pass_index, **kw)
 
     elif args.cmd == "route":
         from .route import build_from_world
