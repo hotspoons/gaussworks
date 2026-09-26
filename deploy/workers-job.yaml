@@ -1,0 +1,85 @@
+# GPU workers. Apply ONE stage at a time: train needs poses finished for a
+# chunk, so draining the poses queue first keeps the ordering obvious.
+#
+# Every pod runs an IDENTICAL command. There is no sharding and no rank: each
+# claims the next unclaimed chunk with an os.mkdir lock on the shared volume,
+# so work self-balances and a dead pod's chunk is reclaimed by whoever gets
+# there next (splatpipe/workqueue.py).
+#
+# SET parallelism AND completions TO THE NUMBER OF FREE GPUs (see README).
+# Anything more just sits Pending.
+#
+# A worker needs far less than the head: no ffmpeg, no build tools. COLMAP and
+# GLOMAP carry their own shared libs in opt/sfm/lib/bundled, and the venv is on
+# the volume -- but it was built on the SYSTEM interpreter, so python3 has to
+# exist in the container. Measured cold start, bare image to running splatpipe:
+# 22 s.
+apiVersion: batch/v1
+kind: Job
+metadata: {name: splats-poses, namespace: default, labels: {app: splats, stage: poses}}
+spec:
+  parallelism: 5
+  completions: 5
+  backoffLimit: 16
+  template:
+    metadata: {labels: {app: splats, stage: poses}}
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+        - {name: work, persistentVolumeClaim: {claimName: splats-work}}
+        - {name: shm, emptyDir: {medium: Memory, sizeLimit: 32Gi}}
+      containers:
+        - name: w
+          image: nvidia/cuda:13.0.2-devel-ubuntu24.04
+          command: ["bash","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq && apt-get install -y -qq python3 python3-venv libgomp1 >/dev/null
+              source /workspace/env.sh
+              splatpipe --config "${SPLAT_CONFIG:?}" poses --chunks "${SPLAT_CHUNKS:?}"
+          env:
+            - {name: SPLAT_CONFIG, value: /workspace/gaussworks/configs/arrowhead.yaml}
+            - {name: SPLAT_CHUNKS, value: /workspace/data/arrowhead/frames/chunks}
+          volumeMounts:
+            - {mountPath: /workspace, name: work}
+            - {mountPath: /dev/shm, name: shm}
+          resources:
+            limits: {nvidia.com/gpu: 1, memory: 200Gi}
+            requests: {cpu: "16", memory: 32Gi}
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: splats-train, namespace: default, labels: {app: splats, stage: train}}
+spec:
+  parallelism: 5
+  completions: 5
+  backoffLimit: 16
+  template:
+    metadata: {labels: {app: splats, stage: train}}
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+        - {name: work, persistentVolumeClaim: {claimName: splats-work}}
+        - {name: shm, emptyDir: {medium: Memory, sizeLimit: 32Gi}}
+      containers:
+        - name: w
+          image: nvidia/cuda:13.0.2-devel-ubuntu24.04
+          command: ["bash","-lc"]
+          args:
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq && apt-get install -y -qq python3 python3-venv libgomp1 >/dev/null
+              source /workspace/env.sh
+              splatpipe --config "${SPLAT_CONFIG:?}" train --chunks "${SPLAT_CHUNKS:?}"
+          env:
+            - {name: SPLAT_CONFIG, value: /workspace/gaussworks/configs/arrowhead.yaml}
+            - {name: SPLAT_CHUNKS, value: /workspace/data/arrowhead/frames/chunks}
+          volumeMounts:
+            - {mountPath: /workspace, name: work}
+            - {mountPath: /dev/shm, name: shm}
+          resources:
+            limits: {nvidia.com/gpu: 1, memory: 200Gi}
+            requests: {cpu: "16", memory: 32Gi}
