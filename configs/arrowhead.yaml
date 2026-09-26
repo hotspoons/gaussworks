@@ -1,0 +1,75 @@
+# Capture campaign: Arrowhead Farms + Patuxent River Rd + Gosheff.
+# Recording 0002 (three chapters, GoPro Max 2), driven 2026-08-24.
+#
+# Sibling of md-backroads.yaml: same camera, same county, same protocol. The
+# differences below are all consequences of ONE fact -- this is a dense
+# subdivision, not an open back road. Houses sit ~20-30 m off a 6 m lane, the
+# streets are short and they loop, and the canopy is continuous.
+campaign:
+  name: arrowhead
+  anchor: "Arrowhead Farms, Crownsville MD (38.98138, -76.69057)"
+  # Road names taken from the baked site's OSM layer
+  # (tools/corridor/data/sites/arrowhead-farms/osm.geojson), not from memory.
+  roads:
+    - "Patuxent River Road"
+    - "Arrowhead Farms Road"
+    - "Arrowhead Farms Lane"
+    - "Patuxent Preserve Lane"
+    - "Patuxent Overlook"
+    - "Home Farm Court"
+    - "Halls Grove Road"
+    - "Gosheff Lane"
+  # Measured from the container headers, not the shot list: 448.4 + 448.4 +
+  # 344.8 s = 1241.6 s (20.7 min) of driving at 204 Mbit/s, two 5952x1920 EAC
+  # tracks per file. GS010001.360 is 4096x1344 -- a MAX 1 geometry, 5 s long --
+  # and GS010003.360 is 1.3 s. Neither is part of this drive; ingest the three
+  # chapters of 0002 only.
+  # capture protocol: as md-backroads -- roof rig on the Rivian, both
+  # directions where possible, stabilization OFF.
+
+ingest:
+  # Unchanged from md-backroads. The fov/pitch pair is NOT a free parameter:
+  # widen it and the planned views start crossing the lens seam, which puts
+  # stitched ghosts into the reconstruction that no later stage removes
+  # (docs/SEAM.md). px_per_deg 18 undersamples the ~21 px/deg source slightly,
+  # which is the survey-grade tradeoff; configs/hq.yaml is the other end.
+  fov: 90
+  px_per_deg: 18
+  pitch: [-10]
+  extract_fps: 6
+  spacing_m: 1.75
+  jpeg_quality: 95
+
+chunk:
+  # 200 m is sized for open back roads. A subdivision puts far more geometry
+  # and far more road per unit area into a cell, so this is the number most
+  # likely to want changing -- but it is a measurement, not a guess: `chunk`
+  # prints frames per cell, and the figure to aim at is the ~1-4k images per
+  # chunk that poses/train have been exercised on. Re-run `chunk` with
+  # --cell-m to compare; it is cheap next to poses.
+  cell_m: 200
+  overlap_m: 40
+  min_frames: 20
+
+corridor:
+  # 25 m off the driven line still counts as observed. On these streets that
+  # reaches the house fronts and the near half of the front yards, which is
+  # what a driver sees; beyond it is somebody's back garden, reconstructed
+  # from nothing and best pruned.
+  radius_m: 25
+  height_margin_m: 8
+  min_spacing_m: 5
+  gap_m: 30
+  gap_s: 30
+
+poses:
+  matcher: spatial
+  align: true
+  # Canopy is the known risk here (docs/TRAILVIEW.md makes the same point for
+  # trails): continuous tree cover degrades the GPS priors that spatial
+  # matching reaches with, and a loop of short streets driven twice is exactly
+  # the case where a missed cross-pass pair splits one reconstruction in two.
+  # Left at the defaults until the ingest GPS verdict is in -- if the track
+  # wanders, raise spatial_radius and/or set loop_closure: vocab.
+  spatial_radius: 4
+  loop_closure: none
