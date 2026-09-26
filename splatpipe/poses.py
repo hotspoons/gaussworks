@@ -186,6 +186,40 @@ def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
                   f"its own chunk (smaller --cell-m or --radius-m, or prune it from the "
                   f"database) before mapping.", flush=True)
 
+    # The per-pass test above asks "is THIS pass weakly attached to the rest",
+    # which misses the case that matters most: passes that split into two or
+    # more internally healthy groups with nothing between them. Each pass is
+    # then strongly connected to its own group and raises no warning, while the
+    # chunk as a whole is two roads that no image sees across -- and a global
+    # mapper reconstructs ONE component and silently drops the other, or floats
+    # them relative to each other.
+    #
+    # Seen on this capture: a cell with passes 0,1 sharing 10,042 pairs and
+    # passes 2,3 sharing 1,268, and exactly zero between the two groups.
+    # Nothing warned.
+    seen, groups = set(), []
+    for i in range(n):
+        if i in seen:
+            continue
+        comp, stack = set(), [i]
+        while stack:                       # connected components over pass pairs
+            a = stack.pop()
+            if a in comp:
+                continue
+            comp.add(a)
+            stack.extend(j for j in range(n)
+                         if j not in comp and (mat[a][j] or mat[j][a]))
+        seen |= comp
+        groups.append(sorted(comp))
+    if len(groups) > 1:
+        desc = "; ".join("passes " + ",".join(str(j) for j in g) for g in groups)
+        print(f"[poses] WARNING {chunk.name}: the passes form {len(groups)} "
+              f"DISCONNECTED groups with no verified pairs between them "
+              f"({desc}). These are separate roads inside one cell, not one "
+              f"road driven twice. A global mapper will reconstruct one group "
+              f"and drop or float the others; split the cell (smaller "
+              f"--cell-m) so each road gets its own chunk.", flush=True)
+
 
 # Two tree formats exist. Our COLMAP 3.11.1 is a FLANN build and reads the
 # classic file; the faiss-format file (for faiss builds, 3.12+) makes it die
