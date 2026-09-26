@@ -118,6 +118,19 @@ def _db_reusable(db: Path, chunk: Path) -> bool:
     return True
 
 
+def _maybe_vocab(chunk: Path, db: Path, gpu: str, loop_closure: str) -> None:
+    """Run retrieval matching once per database, whether fresh or reused."""
+    if loop_closure != "vocab":
+        return
+    marker = chunk / ".loop_closure_vocab"
+    if marker.exists():
+        print(f"[poses] {chunk.name}: vocab loop closure already in the database",
+              flush=True)
+        return
+    _vocab_tree_match(db, gpu)
+    marker.write_text("vocab\n")
+
+
 def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
     """Print the verified-pair matrix between corridor passes; warn on a weak one.
 
@@ -278,6 +291,16 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
 
     gpu = "1" if use_gpu else "0"
     if reuse:
+        # Loop closure has to be reachable on a REUSED database, or it cannot
+        # be used as a remedy. It is normally wanted precisely when a chunk has
+        # already been mapped once and come out badly -- and the alternative,
+        # --refresh, throws away the features and matches (73 min on a 3,870
+        # image chunk) to add matching that is purely additive to them.
+        #
+        # The marker is what makes it idempotent: vocab_tree_matcher would
+        # otherwise re-run on every remap of that chunk, which costs the same
+        # again and adds nothing the second time.
+        _maybe_vocab(chunk, db, gpu, loop_closure)
         _pass_connectivity(chunk, db)
         _map_and_align(chunk, db, sparse, align, mapper)
         return
@@ -342,8 +365,7 @@ def solve_chunk(chunk: Path, matcher: str = "spatial", align: bool = True,
               "--database_path", str(db),
               "--SequentialMatching.overlap", "15",
               "--SiftMatching.use_gpu", gpu])
-        if loop_closure == "vocab":
-            _vocab_tree_match(db, gpu)
+        _maybe_vocab(chunk, db, gpu, loop_closure)
     elif matcher == "exhaustive":
         # small chunks: all-pairs matching links the rig's cam folders, which
         # sequential (name-ordered) matching never crosses
