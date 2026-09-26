@@ -260,6 +260,31 @@ def _vocab_tree_match(db: Path, gpu: str, num_images: int = 50,
     image, 3,324 images indexed for 70 minutes and then the pair generation
     aborted with std::bad_alloc; at 500 the whole pass took 25 minutes and
     finished. Retrieval does not need more than that to find the same street.
+
+    WHERE THIS MAKES THINGS WORSE, measured rather than argued. The win above
+    came from a RURAL back road, where two stretches that look alike are
+    usually the same stretch. A SUBDIVISION is the opposite: the houses were
+    built from a handful of plans, the mailboxes and lamp posts repeat, and
+    retrieval cannot tell one cul-de-sac from the next.
+
+    On the Arrowhead Farms capture, one 1,908-image chunk (2 roads, GPS fine
+    at median DOP 4.3) ran with spatial+sequential and then again with vocab
+    added to the same database:
+
+        spatial + sequential      alignment error  25.5 mean / 28.1 median
+        + vocab retrieval         alignment error  7961 mean / 42.9 median
+                                  1554/1908 images in the connected component
+                                  259/318 positions registered (was 318/318)
+
+    The cross-pass pair counts looked BETTER with vocab (14,741 between passes
+    against 10,042). They were false matches between different houses of the
+    same design, and they tore the reconstruction apart -- a mean three orders
+    of magnitude above the median is cameras thrown kilometres away.
+
+    So this flag is not a general "make matching stronger" knob. Reach for it
+    when GPS priors are untrustworthy AND the scene is visually distinctive,
+    and re-measure after: registered fraction and connected-component size
+    tell the truth, cross-pass pair COUNTS do not.
     """
     tree = Path(os.environ.get("COLMAP_VOCAB_TREE",
                                "/workspace/opt/colmap-vocab/vocab_tree_flickr100K_words256K.bin"))
