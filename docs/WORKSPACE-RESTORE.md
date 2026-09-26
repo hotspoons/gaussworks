@@ -116,6 +116,64 @@ Anything in flight dies and is restartable; nothing is lost that was expensive:
    train ~80 min on an A100 to get back to the 21.2 dB driveway render.
 6. Recreate `/workspace/.gitconfig` and `/workspace/.git-credentials` (HANDOFF §2.1).
 
+## 3a. Walked for real, on a different cluster (2026-09-26)
+
+The fallback above stopped being hypothetical. The volume is **not on
+`gh200-1`** — no PV with `patapsco.ai/keep=true`, and
+`pvc-14a11d18-e7b2-41c4-8dc9-07cc6532e80f` does not exist there — so the
+Arrowhead Farms capture was rebuilt from step 1. What the first real run of
+§3 cost, and what it needed that the script did not have:
+
+**The fleet is aarch64.** `gh200-1` is 8 × GH200 480GB (Grace+Hopper, sm_90,
+72 cores and ~600 GB of RAM per node). Every measurement in this repo before
+now came from an x86_64 A100 pod, and three things assumed that:
+
+| assumed | reality on Grace | fixed by |
+| --- | --- | --- |
+| CUDA runfile `..._linux.run` | ARM build is `..._linux_sbsa.run`; the x86 name 404s | runfile name from `uname -m`; and if the image already ships a matching toolkit, adopt it (`nvidia/cuda:13.0.2-devel-ubuntu24.04` is multi-arch) |
+| `pycolmap` from PyPI | **no aarch64 wheels at any version** | build from `$S/colmap/pycolmap`, which also fixes reader/writer version skew on x86 |
+| Python headers present | `python3-dev` absent; CMake reports it as "could not find Python" | added to `PKGS` |
+
+**The build used to kill itself on line one of a fresh volume.** `env.sh`
+ended with `[ -f venv/bin/activate ] && source ...`; with no venv that returns
+1, so *sourcing* `env.sh` returned 1, and `pod-build-stack.sh` runs under
+`set -e`. The log simply stopped after the last line that printed, which looks
+exactly like a job still running. Fixed in `scripts/env.sh`; it now always
+returns 0.
+
+**Shape of the pod.** For batch work a plain `Pod` mounting the PVC is easier
+to drive than a `ZipspaceDeployment` — no operator involved, and `kubectl
+exec` is the whole interface. The pieces from §2 that still matter are
+`/dev/shm` as a Memory emptyDir and a container memory limit.
+
+One trap the limit introduces: `pod-build-stack.sh` sizes `CXX_JOBS` from
+`MemAvailable`, which inside a container reports the **node's** memory (600 GB
+here), not the cgroup limit. Unset, it picks ~72 parallel C++ jobs against a
+128 GiB ceiling and the container OOMs. Pass `CXX_JOBS` explicitly
+(`CXX_JOBS=32 MAX_JOBS=4` was comfortable).
+
+**RWX, not RWO.** `deploy/devpod.yaml` asks for ReadWriteOnce because it was
+written for one interactive pod. Stages 3 and 4 pull from a claim-based queue
+on shared storage, so putting all eight GPUs on one world needs
+ReadWriteMany — `ceph-filesystem` provides it:
+
+```bash
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: splats-work, namespace: default, labels: {patapsco.ai/keep: "true"}}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ceph-filesystem
+  resources: {requests: {storage: 1Ti}}
+YAML
+```
+
+**Re-uploading 31 GB** (§3 step 4) ran at 14–23 MB/s through
+`kubectl exec -i <pod> -- bash -c 'cat > dst' < src`, so ~25 min for the three
+chapters. Verify by size **and** md5 per file; a truncated 11 GB chapter
+surfaces an hour later as "fewer GPS samples than expected".
+
 ## 4. Not this repo's call
 
 The platform operator's crashloop and whether to delete its `OperatorConfig`
