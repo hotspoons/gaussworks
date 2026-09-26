@@ -13,7 +13,18 @@ export TORCH_HOME=/workspace/.torch-home          # torchvision/LPIPS weights, o
 # git identity + credential store on the PVC (the container's ~/.gitconfig and
 # ~/.git-credentials vanish on every restart)
 export GIT_CONFIG_GLOBAL=/workspace/.gitconfig
+# These two are `if` blocks, not `[ -f x ] && source x`, and the file ends with
+# a true command. env.sh is sourced by scripts that run under `set -e`, and a
+# trailing && whose test fails makes SOURCING env.sh return 1 -- which aborts
+# the caller. That is not hypothetical: it is what pod-build-stack.sh does on a
+# fresh volume, where the venv it is about to create does not exist yet, so the
+# build killed itself on its first run and left behind a log that just stopped.
 # shellcheck disable=SC1091
-[ -f /workspace/gaussworks/scripts/gsplat-env.sh ] && source /workspace/gaussworks/scripts/gsplat-env.sh
+if [ -f /workspace/gaussworks/scripts/gsplat-env.sh ]; then
+    source /workspace/gaussworks/scripts/gsplat-env.sh
+fi
 # shellcheck disable=SC1091
-[ -f /workspace/venv/bin/activate ] && source /workspace/venv/bin/activate
+if [ -f /workspace/venv/bin/activate ]; then
+    source /workspace/venv/bin/activate
+fi
+:
