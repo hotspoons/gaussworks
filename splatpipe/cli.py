@@ -7,6 +7,18 @@ from pathlib import Path
 import yaml
 
 
+def _origin(v) -> tuple[float, float] | None:
+    """Accept "lat,lon" from the CLI, or {lat, lon} / [lat, lon] from a config."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        lat, lon = (float(x) for x in v.split(","))
+        return (lat, lon)
+    if isinstance(v, dict):
+        return (float(v["lat"]), float(v["lon"]))
+    return (float(v[0]), float(v[1]))
+
+
 def _cfg(path: str | None, stage: str) -> dict:
     if not path:
         return {}
@@ -50,6 +62,9 @@ def main():
     s.add_argument("--cell-m", type=float, help="grid cell size, metres (0 = one chunk)")
     s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
     s.add_argument("--min-frames", type=int, help="cells with fewer own frames are dropped")
+    s.add_argument("--origin", help="lat,lon of the project ENU origin and cell "
+                                    "grid. Default: the first frame's fix, which "
+                                    "is usually the least converged one in the drive")
 
     s = sub.add_parser("profiles", help="list camera profiles, or detect one for a file")
     s.add_argument("video", nargs="?", type=Path)
@@ -231,7 +246,8 @@ def main():
                     else cfg.get("overlap_m", 40.0),
                     min_frames=args.min_frames if args.min_frames is not None
                     else cfg.get("min_frames", 20),
-                    corridor_cfg=_cfg(args.config, "corridor"))
+                    corridor_cfg=_cfg(args.config, "corridor"),
+                    origin=_origin(args.origin or cfg.get("origin")))
 
     elif args.cmd == "profiles":
         from . import profiles as P

@@ -95,7 +95,8 @@ def _geo_index(frames_dir: Path) -> dict:
 
 
 def make_chunks(frames_dir: Path, cell_m: float = 200.0, overlap_m: float = 40.0,
-                min_frames: int = 20, corridor_cfg: dict | None = None) -> Path:
+                min_frames: int = 20, corridor_cfg: dict | None = None,
+                origin: tuple[float, float] | None = None) -> Path:
     frames = _load_frames(frames_dir)
     chunks_dir = frames_dir / "chunks"
     chunks_dir.mkdir(exist_ok=True)
@@ -103,7 +104,31 @@ def make_chunks(frames_dir: Path, cell_m: float = 200.0, overlap_m: float = 40.0
     corridor_cfg = corridor_cfg or {}
 
     have_gps = bool(frames) and frames[0].get("lat") is not None
-    origin = (frames[0]["lat"], frames[0]["lon"]) if have_gps else (0.0, 0.0)
+    # The project origin defines the ENU frame that poses' model_aligner
+    # aligns into, that the cell grid is indexed from, and that world.json
+    # hands downstream -- so it is worth choosing rather than inheriting.
+    #
+    # The default is the first frame's fix, and the first frame of a drive is
+    # the WORST fix in it: a receiver that has just been switched on has not
+    # converged, and on this campaign's own footage the opening samples carry
+    # DOP 36 and fix=0 while the last chapter sits at DOP 1.4. Nothing
+    # downstream can tell that the frame it was handed is garbage, because a
+    # cold-start fix is a plausible-looking lat/lon.
+    #
+    # Pinning the origin also lets a capture share an ENU frame with something
+    # it has to line up with -- a baked corridor site, an earlier capture of
+    # the same roads -- which turns "compose two frames through ECEF and hope"
+    # into an identity.
+    if origin is not None:
+        origin = (float(origin[0]), float(origin[1]))
+    elif have_gps:
+        origin = (frames[0]["lat"], frames[0]["lon"])
+        print(f"[chunk] origin not pinned: using the first frame "
+              f"({origin[0]:.6f}, {origin[1]:.6f}). If this capture must line "
+              f"up with an existing ENU frame, pin it instead -- and note that "
+              f"the first fix of a drive is usually its least converged.")
+    else:
+        origin = (0.0, 0.0)
 
     if not have_gps or cell_m <= 0:
         groups = {(0, 0): (frames, len(frames))}

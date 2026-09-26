@@ -41,6 +41,17 @@ ingest:
   jpeg_quality: 95
 
 chunk:
+  # Pinned to the arrowhead-farms corridor site's anchor
+  # (tools/corridor/data/sites/arrowhead-farms/web/manifest.json, frame.anchor),
+  # which arrowhead-farms-network shares. Two reasons, and the second is the
+  # one that matters:
+  #   1. the default origin is the first frame's fix, and this drive's first
+  #      fix is its worst -- 45 s of cold start at DOP 36 with fix=0 before the
+  #      receiver converges (it ends the drive at DOP 1.4);
+  #   2. sharing the anchor makes this capture's ENU frame *identical* to the
+  #      baked world's, so composing the two is an identity rather than a
+  #      round trip through ECEF that has to be trusted.
+  origin: {lat: 38.98138, lon: -76.69057}
   # 200 m is sized for open back roads. A subdivision puts far more geometry
   # and far more road per unit area into a cell, so this is the number most
   # likely to want changing -- but it is a measurement, not a guess: `chunk`
