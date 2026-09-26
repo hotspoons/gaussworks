@@ -66,7 +66,10 @@ grep -q 'source /workspace/env.sh' ~/.bashrc 2>/dev/null \
 RC
 
 # --- apt: install AND keep the .debs on the PVC for offline bootstraps -------
-PKGS="ffmpeg rsync tmux cmake ninja-build build-essential git
+# python3-dev: pycolmap is built from source here (see below) and CMake's
+# FindPython needs Python.h. Without it the failure is "Could NOT find Python
+# (missing: Interpreter Development.Module)", which reads like a broken venv.
+PKGS="ffmpeg rsync tmux cmake ninja-build build-essential git python3-dev
       libboost-program-options-dev libboost-graph-dev libboost-system-dev
       libboost-filesystem-dev libboost-test-dev libeigen3-dev libfreeimage-dev
       libmetis-dev libgoogle-glog-dev libgflags-dev libsqlite3-dev libceres-dev
@@ -155,8 +158,25 @@ echo "[build-stack] bundled $(ls $P/lib/bundled | wc -l) shared libs into $P/lib
 # --- gsplat + reference trainer deps -------------------------------------------------
 [ -d $W/opt/gsplat ] || git clone --recursive https://github.com/nerfstudio-project/gsplat $W/opt/gsplat
 git -C $W/opt/gsplat checkout -q "$GSPLAT_REF"
-grep -vE "git\+" $W/opt/gsplat/examples/requirements.txt > $W/tmp/gsplat-req.txt
+grep -vE "git\+|^pycolmap" $W/opt/gsplat/examples/requirements.txt > $W/tmp/gsplat-req.txt
 uv pip install --python $W/venv/bin/python -r $W/tmp/gsplat-req.txt jaxtyping nvtx "rich>=12" ninja cupy-cuda13x
+
+# pycolmap from the COLMAP tree we just built, never from PyPI. Two reasons,
+# and the second one applies on every architecture:
+#   1. there are NO aarch64 wheels. On the GH200 fleet the resolver fails
+#      outright ("no wheels with a matching platform tag") and takes the whole
+#      build down at the last step, after COLMAP and GLOMAP have compiled.
+#   2. the published wheel is a DIFFERENT COLMAP. PyPI is on 4.2.0; we pin
+#      3.11.1. gsplat's trainer uses pycolmap to read the reconstruction that
+#      these binaries wrote, so a version mismatch there is the same class of
+#      bug as the GLOMAP 1.2.0 note above -- and that one cost hours.
+# Building from $S/colmap guarantees the reader and the writer are one version.
+$W/venv/bin/python -c "import pycolmap" 2>/dev/null || {
+    echo "[build-stack] building pycolmap $COLMAP_VER from source"
+    CMAKE_PREFIX_PATH=$P CMAKE_BUILD_PARALLEL_LEVEL=$CXX_JOBS \
+    SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS;-DCMAKE_CUDA_COMPILER=$CUDA_HOME/bin/nvcc;-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF" \
+    uv pip install --python $W/venv/bin/python $S/colmap/pycolmap
+}
 python -c "import gsplat" 2>/dev/null \
     || uv pip install --python $W/venv/bin/python --no-build-isolation $W/opt/gsplat
 # git deps need torch at build time -> one by one, non-fatal (optional trainer features)
@@ -172,6 +192,7 @@ uv pip install --python $W/venv/bin/python -e /workspace/gaussworks
 
 # --- verify, loudly ---------------------------------------------------------------------
 python -c "import gsplat, imageio, viser; print('[build-stack] OK gsplat', gsplat.__version__)"
+python -c "import pycolmap; print('[build-stack] OK pycolmap', pycolmap.__version__)"
 echo "[build-stack] colmap:   $(colmap -h 2>&1 | sed -n 2p)"
 echo "[build-stack] glomap:   $(glomap -h 2>&1 | sed -n 3p)"
 echo "[build-stack] exiftool: $(exiftool -ver)"
