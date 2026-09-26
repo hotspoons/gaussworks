@@ -41,6 +41,8 @@ def main():
     s.add_argument("--extract-fps", type=float)
     s.add_argument("--spacing-m", type=float)
     s.add_argument("--hwaccel", help="ffmpeg decoder, e.g. cuda (8K HEVC is decode-bound)")
+    s.add_argument("--jobs", type=int, help="threads rendering virtual views "
+                                            "(default: min(32, cores))")
     s.add_argument("--start-s", type=float, default=0.0, help="skip into the clip")
     s.add_argument("--duration-s", type=float, help="ingest only this many seconds")
     s.add_argument("--near", help="lat,lon: keep only frames near this point")
@@ -225,6 +227,7 @@ def main():
             else cfg.get("spacing_m", 1.75),
             jpeg_quality=cfg.get("jpeg_quality", 95),
             hwaccel=args.hwaccel or cfg.get("hwaccel"),
+            jobs=args.jobs or cfg.get("jobs", 0),
             start_s=args.start_s, duration_s=args.duration_s,
             near=(tuple(float(v) for v in args.near.split(",")) if args.near else None),
             radius_m=args.radius_m, segment_s=args.segment_s,

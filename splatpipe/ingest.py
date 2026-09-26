@@ -31,6 +31,7 @@ import math
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -206,7 +207,7 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                   extract_fps: float = 6.0,
                   spacing_m: float = 1.75, jpeg_quality: int = 95,
                   hwaccel: str | None = None, start_s: float = 0.0,
-                  duration_s: float | None = None,
+                  duration_s: float | None = None, jobs: int = 0,
                   near: tuple[float, float] | None = None,
                   radius_m: float = 400.0, segment_s: float = 60.0,
                   no_telemetry: bool = False) -> Path:
@@ -227,6 +228,22 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                   f"covers {frac:.1%} of its frame; the rest is masked")
     writer = FrameWriter(out, plan=plan, jpeg_quality=jpeg_quality,
                          profile=prof.name, coverage=coverage if plan else None)
+
+    # Per capture position this stage decodes two full-resolution frames,
+    # remaps six virtual views out of them, and encodes those. Measured on a
+    # GH200 node: 449 ms of that per position on one core, against 33 s of
+    # ffmpeg per 20 s of video -- so run serially, the loop is ~80% of ingest
+    # and the other 71 cores are idle.
+    #
+    # It fans out with THREADS rather than processes because every expensive
+    # call (imread, remap, imencode) is OpenCV releasing the GIL: measured
+    # 10.2x at 8 threads, 19.7x at 16, 37.9x at 32, which is near-linear and
+    # is what a process pool would have cost pickling 11 MP frames to get.
+    # OpenCV's own thread pool is turned off so the two do not oversubscribe.
+    jobs = jobs or min(32, os.cpu_count() or 8)
+    if jobs > 1:
+        cv2.setNumThreads(1)
+    pool = ThreadPoolExecutor(jobs)
 
     try:
         for video in videos:
@@ -316,12 +333,17 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                     if dist is None or spacing_m <= 0:
                         keep = list(range(len(cands)))
                     else:
+                        # Every index belongs to exactly one window, so the
+                        # serial version evaluated sharpness once per candidate
+                        # anyway -- and each call decodes a full-resolution
+                        # frame. Computing the segment up front is the same
+                        # work on every core instead of one.
+                        sharp = list(pool.map(lambda c: sharpness(c[1][0]), cands))
                         keep, window = [], []
                         for i in range(len(cands)):
                             window.append(i)
                             if dist[i] >= next_d:
-                                keep.append(max(window,
-                                                key=lambda j: sharpness(cands[j][1][0])))
+                                keep.append(max(window, key=lambda j: sharp[j]))
                                 window, next_d = [], dist[i] + spacing_m
 
                     if centre is not None and gps:
@@ -330,20 +352,32 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                                        ll_to_enu(lat[i], lon[i], 0.0, centre)[:2])
                                 <= radius_m * radius_m]
 
-                    for i in keep:
-                        t, paths = cands[i]
-                        frames = [cv2.imread(str(p)) for p in paths]
+                    def render(i):
+                        """Decode one capture position into its virtual views."""
+                        frames = [cv2.imread(str(p)) for p in cands[i][1]]
                         if any(f is None for f in frames):
-                            continue
-                        if plan:
-                            cams = [driver.sample(("view", k), d, frames,
-                                                  plan[k]["lens"])
-                                    for k, d in enumerate(dirs)]
-                        else:
-                            cams = [frames[0]]
-                        writer.add_views(cams, lat[i], lon[i], alt[i], t=t,
-                                         meta={"video": video.name})
-                        kept_here += 1
+                            return None
+                        if not plan:
+                            return [frames[0]]
+                        return [driver.sample(("view", k), d, frames,
+                                              plan[k]["lens"])
+                                for k, d in enumerate(dirs)]
+
+                    # Rendering is decode + remap + nothing shared, so it fans
+                    # out; WRITING stays serial and in order, because the
+                    # writer's seq is the frame identity that geo.txt,
+                    # frames.jsonl and every image filename agree on. Batched
+                    # so at most a few hundred MB of decoded views are in
+                    # flight rather than the whole segment.
+                    for b in range(0, len(keep), 4 * jobs):
+                        batch = keep[b:b + 4 * jobs]
+                        for i, cams in zip(batch, pool.map(render, batch)):
+                            if cams is None:
+                                continue
+                            writer.add_views(cams, lat[i], lon[i], alt[i],
+                                             t=cands[i][0],
+                                             meta={"video": video.name})
+                            kept_here += 1
                 seg_start += seg_len
                 print(f"[ingest] {video.name}: {seg_start - start_s:6.0f}s / "
                       f"{end_s - start_s:.0f}s, kept {kept_here}", flush=True)
@@ -353,6 +387,7 @@ def ingest_videos(videos: list[Path], out: Path, views: list[dict] | None = None
                      f"--near/--radius-m without decoding)" if skipped_s else ""),
                   flush=True)
     finally:
+        pool.shutdown()
         writer.close()
     return out
 
