@@ -23,7 +23,14 @@ COLMAP_VER=${COLMAP_VER:-3.11.1}
 GLOMAP_VER=${GLOMAP_VER:-1.0.0}
 GSPLAT_REF=${GSPLAT_REF:-main}
 EXIFTOOL_VER=${EXIFTOOL_VER:-13.44}     # 12.90+ required for GoPro GPS9
-CUDA_RUNFILE=${CUDA_RUNFILE:-cuda_13.0.2_580.95.05_linux.run}   # major must match the torch wheel
+# CUDA runfile name is ARCH-SPECIFIC: NVIDIA suffixes the Grace/ARM build
+# "_linux_sbsa". Getting this wrong 404s rather than failing usefully, and the
+# GH200 fleet (gh200-1) is aarch64 while the original A100 pod was x86_64.
+case "$(uname -m)" in
+    aarch64|arm64) _cuda_plat=linux_sbsa ;;
+    *)             _cuda_plat=linux ;;
+esac
+CUDA_RUNFILE=${CUDA_RUNFILE:-cuda_13.0.2_580.95.05_${_cuda_plat}.run}   # major must match the torch wheel
 TORCH_SPEC=${TORCH_SPEC:-"torch==2.9.1 torchvision"}
 TORCH_INDEX=${TORCH_INDEX:-https://download.pytorch.org/whl/cu130}
 CUDA_ARCHS=${CUDA_ARCHS:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d ' .')}
@@ -71,6 +78,22 @@ sudo apt-get install -y -qq -o Dir::Cache::archives=$W/apt-cache/archives \
 sudo chown -R "$(id -u):$(id -g)" $W/apt-cache
 
 # --- CUDA toolkit onto the PVC ------------------------------------------------
+# If the base image already ships a toolkit of the right major version, adopt
+# it instead of spending 4 GB and ~15 min re-installing one. Adopt by TESTING
+# nvcc, not by testing that a path exists -- a dangling symlink here would fail
+# later, inside a COLMAP build, as something that looks like a CMake problem.
+if [ ! -x $W/opt/cuda/bin/nvcc ] && [ -x "${SYSTEM_CUDA:-/usr/local/cuda}/bin/nvcc" ]; then
+    _sys=${SYSTEM_CUDA:-/usr/local/cuda}
+    _want=$(echo "$CUDA_RUNFILE" | sed -E 's/cuda_([0-9]+)\..*/\1/')
+    _have=$("$_sys/bin/nvcc" --version | sed -nE 's/.*release ([0-9]+)\..*/\1/p')
+    if [ "$_have" = "$_want" ]; then
+        echo "[build-stack] adopting image CUDA $_have at $_sys (no runfile needed)"
+        mkdir -p $W/opt && ln -sfn "$(readlink -f "$_sys")" $W/opt/cuda
+        $W/opt/cuda/bin/nvcc --version >/dev/null || { echo "[build-stack] adopted nvcc does not run" >&2; exit 1; }
+    else
+        echo "[build-stack] image CUDA $_have != required $_want; installing runfile"
+    fi
+fi
 if [ ! -x $W/opt/cuda/bin/nvcc ]; then
     ver=$(echo "$CUDA_RUNFILE" | sed -E 's/cuda_([0-9.]+)_.*/\1/')
     f=$W/downloads/$CUDA_RUNFILE
