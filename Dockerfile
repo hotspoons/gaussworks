@@ -100,14 +100,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # version note below, the packaged one is only here for its Perl dependencies.
 # The -dev boost/ceres packages are the lazy way to satisfy the copied
 # binaries' shared libs; fine for a dev image.
-# The -dev packages are here because pycolmap is COMPILED in this stage (below): it
-# includes COLMAP's headers, which include Eigen, Boost, SQLite3 and the rest, so the
+# NOTE: build-essential but deliberately NO cmake or ninja from apt. scikit-build-core
+# brings its own CMake (4.4) and pybind11 needs it: with Ubuntu's 3.28 on PATH,
+# scikit-build-core uses that instead and pybind11's python_add_library fails with
+# "No SOURCES given to target: _core". Installing cmake here to be helpful is what
+# caused that build. The -dev packages below are here because pycolmap is COMPILED in
+# this stage: includes COLMAP's headers, which include Eigen, Boost, SQLite3 and the rest, so the
 # runtime stage needs the same set the builder did. Discovered the expensive way --
 # "Could NOT find SQLite3" after thirty minutes of Ceres, COLMAP and GLOMAP compiling
 # perfectly. Adding them one per failed build costs half an hour each; this is the set
 # that is already known to build COLMAP.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libimage-exiftool-perl curl ca-certificates git build-essential cmake ninja-build \
+    ffmpeg libimage-exiftool-perl curl ca-certificates git build-essential \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libboost-filesystem-dev libboost-test-dev libeigen3-dev libsqlite3-dev \
     libfreeimage-dev libmetis-dev libgoogle-glog-dev libgflags-dev \
