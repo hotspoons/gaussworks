@@ -1,0 +1,104 @@
+# Build and publish the splat pipeline image.
+#
+# WHY THIS EXISTS. Until now the only way to get this stack onto a machine was
+# scripts/pod-build-stack.sh, which installs CUDA, COLMAP, GLOMAP, gsplat and a venv
+# ONTO A PERSISTENT VOLUME. That is fine for one long-lived dev pod and wrong for
+# anything a scheduler starts: the runtime lives on a disk instead of in an artifact, a
+# fresh pod is 35 minutes of compiling, and nothing records what a given run actually
+# ran. An image fixes all three.
+#
+# WHY arm64 ONLY. The fleet this runs on (gh200-1) is Grace-Hopper, so arm64 is not a
+# portability nicety here, it is the only architecture that matters. Building amd64 as
+# well would double a long compile for a machine nobody runs it on. Add a matrix if that
+# changes; the Dockerfile is architecture-agnostic and CUDA_ARCHS is a build arg.
+#
+# WHY NATIVE AND NOT QEMU. This compiles Ceres, COLMAP, GLOMAP, pycolmap and gsplat's
+# CUDA kernels from source. Emulating nvcc is roughly an order of magnitude slower and
+# does not finish inside a job. `ubuntu-24.04-arm` is a first-class GitHub runner.
+#
+# CUDA_ARCHS=90 is sm_90 (GH200/H200) and nothing else. Every additional architecture is
+# another full pass of every CUDA kernel; build only what the fleet has.
+name: gaussworks image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - 'splatpipe/**'
+      - 'pyproject.toml'
+      - '.github/workflows/image.yml'
+  workflow_dispatch:
+    inputs:
+      cuda_archs:
+        description: 'CUDA_ARCHS (semicolon separated; 90 = GH200)'
+        default: '90'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/hotspoons/gaussworks
+
+concurrency:
+  group: gaussworks-image-${{ github.ref }}
+  # Queue, do not kill. Cancelling an hour-long compile because an unrelated commit
+  # landed throws away all of it and reports a failure that never happened.
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: linux/arm64
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # A CUDA devel base unpacks to ~11 GB and this adds COLMAP, GLOMAP, torch and
+      # gsplat on top. Reclaim first: failing here is cheap, failing 50 minutes in is not.
+      - name: Reclaim disk
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+                      /usr/local/share/boost /usr/local/share/powershell /opt/hostedtoolcache \
+                      /usr/local/lib/node_modules "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean || true
+          sudo docker system prune -af --volumes || true
+          echo "after:"; df -h / | tail -1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            CUDA_ARCHS=${{ inputs.cuda_archs || '90' }}
+          # Registry cache rather than type=gha: this image is well past GitHub's 10 GB
+          # Actions cache cap, where mode=max evicts itself at best. On the first build
+          # the importer logs "not found" -- expected once, not fatal.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-arm64
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-arm64,mode=max,image-manifest=true,oci-mediatypes=true
+          provenance: false
+
+      - name: Show what shipped
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:latest || true

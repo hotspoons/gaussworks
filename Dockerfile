@@ -8,7 +8,13 @@
 # CUDA_ARCHS defaults cover the fleet: A100 (80), L40S (89), GH200/H200 (90),
 # RTX Pro Blackwell (120). Trim per-arch via build args if build time hurts.
 
-ARG BASE_IMAGE=harbor.tools.basedweights.com/patapsco.ai/ai-dev-pod:0.12.0
+# A PUBLIC, MULTI-ARCH base, so this image can be built by CI and pulled by anything.
+# It used to be the platform's ai-dev-pod, which needs Harbor credentials to pull and is
+# not published for arm64 -- and the fleet this runs on (GH200) is arm64, so the image
+# could never have been built for the machines that use it. nvidia/cuda ships nvcc for
+# both architectures and nothing else is assumed: python, torch and the rest are
+# installed explicitly below rather than inherited.
+ARG BASE_IMAGE=nvidia/cuda:13.0.2-devel-ubuntu24.04
 
 # --- SfM builder --------------------------------------------------------------
 FROM ${BASE_IMAGE} AS sfm-builder
@@ -51,6 +57,7 @@ RUN git clone --depth 1 -b ${COLMAP_VER} https://github.com/colmap/colmap /tmp/c
         -DCMAKE_PREFIX_PATH=/opt/sfm \
         -DCMAKE_INSTALL_PREFIX=/opt/sfm \
     && cmake --build /tmp/colmap/build --target install \
+    && cp -r /tmp/colmap/pycolmap /tmp/pycolmap \
     && rm -rf /tmp/colmap
 
 # GLOMAP: global SfM, much faster than incremental mapper on road sequences
@@ -107,13 +114,47 @@ ENV PATH=/opt/sfm/bin:${PATH}
 # gsplat from source (kernels for our arch list) + its examples, which provide
 # the reference trainer that splatpipe train shells out to per chunk.
 ENV TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;12.0+PTX"
+# Python and torch EXPLICITLY. The old base carried them; this one does not, and
+# inheriting an interpreter is how a build starts depending on something nobody
+# declared. python3-dev is not optional: pycolmap is compiled below and CMake's
+# FindPython needs the headers.
+ARG TORCH_SPEC="torch==2.9.1 torchvision"
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu130
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-pip python3-venv git \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && pip install --break-system-packages --no-cache-dir ${TORCH_SPEC} --index-url ${TORCH_INDEX}
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
+# pycolmap from the COLMAP we pinned, never from PyPI: there are NO aarch64 wheels at
+# any version, and even on x86 the published wheel is a different COLMAP (4.2.0) from the
+# binaries this image carries (3.11.1) -- and gsplat uses it to READ the reconstruction
+# those binaries WROTE.
+COPY --from=sfm-builder /tmp/pycolmap /tmp/pycolmap
+RUN CMAKE_PREFIX_PATH=/opt/sfm \
+    SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS};-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF" \
+    pip install --no-cache-dir /tmp/pycolmap && rm -rf /tmp/pycolmap
+
 RUN git clone --recursive https://github.com/nerfstudio-project/gsplat /opt/gsplat \
     && cd /opt/gsplat && git checkout ${GSPLAT_REF} \
     && pip install --no-build-isolation . \
-    && pip install -r examples/requirements.txt
+    && grep -vE "^pycolmap" examples/requirements.txt > /tmp/req.txt \
+    && pip install -r /tmp/req.txt
 ENV GSPLAT_EXAMPLES=/opt/gsplat/examples
 
 COPY . /opt/splatpipe
 RUN pip install /opt/splatpipe
+
+# Fail the BUILD, not a deployment three hours into a capture. Every one of these has
+# been a real outage at some point today: exiftool without GPS9 reads as "the camera had
+# no fix", a COLMAP without CUDA is 4x slower and says nothing, and a missing pycolmap
+# only surfaces when the trainer tries to read a reconstruction.
+RUN set -eux; \
+    colmap -h 2>&1 | sed -n 2p | grep -q CUDA; \
+    glomap -h >/dev/null; \
+    [ "$(exiftool -listx | grep -c GPS9)" -gt 0 ]; \
+    python -c "import torch, gsplat, pycolmap, cv2, splatpipe; print('torch', torch.__version__, 'gsplat', gsplat.__version__, 'pycolmap', pycolmap.__version__)"; \
+    splatpipe profiles | grep -q gopro-max2
 
 USER 1000
