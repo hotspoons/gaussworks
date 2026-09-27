@@ -100,11 +100,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # version note below, the packaged one is only here for its Perl dependencies.
 # The -dev boost/ceres packages are the lazy way to satisfy the copied
 # binaries' shared libs; fine for a dev image.
+# The -dev packages are here because pycolmap is COMPILED in this stage (below): it
+# includes COLMAP's headers, which include Eigen, Boost, SQLite3 and the rest, so the
+# runtime stage needs the same set the builder did. Discovered the expensive way --
+# "Could NOT find SQLite3" after thirty minutes of Ceres, COLMAP and GLOMAP compiling
+# perfectly. Adding them one per failed build costs half an hour each; this is the set
+# that is already known to build COLMAP.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libimage-exiftool-perl curl ca-certificates \
+    ffmpeg libimage-exiftool-perl curl ca-certificates git build-essential cmake ninja-build \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
+    libboost-filesystem-dev libboost-test-dev libeigen3-dev libsqlite3-dev \
     libfreeimage-dev libmetis-dev libgoogle-glog-dev libgflags-dev \
-    libceres-dev libflann-dev libsuitesparse-dev libglew-dev \
+    libceres-dev libflann-dev libsuitesparse-dev libcgal-dev libglew-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ExifTool from upstream, NOT the distro package. GoPro moved the GPMF GPS
@@ -137,7 +144,7 @@ ENV TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;12.0+PTX"
 ARG TORCH_SPEC="torch==2.9.1 torchvision"
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu130
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-dev python3-pip python3-venv git \
+    python3 python3-dev python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && pip install --break-system-packages --no-cache-dir ${TORCH_SPEC} --index-url ${TORCH_INDEX}
