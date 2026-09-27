@@ -217,6 +217,37 @@ fit returned a meaningless 69.6° / 537 m rise. Measuring *along* arclength is t
 version. **Any statistic computed over a 1-D camera path needs its conditioning checked**, which is
 a standing hazard in this domain and absent from bounded-scene work.
 
+### 1.6a The same ill-conditioning, walked into twice
+
+Worth recording because it is the clearest evidence that this hazard is
+structural to corridor captures rather than a one-off mistake.
+
+Having diagnosed the dz-only levelling of §1.4 as insufficient — six chunks
+remained in >3 m disagreement with neighbours while being internally consistent
+to 0.02–1.67 m, which is the signature of a chunk *tilted* as a block — the
+obvious generalisation is to solve a vertical **plane** per chunk,
+`dz(x,y) = a + b·x + c·y`, using every overlapping point pair rather than
+pairwise medians. Thousands of observations, 3 unknowns per chunk: comfortably
+determined, on paper.
+
+The solution came back wanting to tilt chunks by **45°, 35° and 21°** and shift
+them by **±35 m**. Nonsense, and nonsense of a specific kind: the observations
+that tie two chunks together lie along the **road they share**, which is a
+*curve*, not an area. The tilt component across that curve is unconstrained,
+so the solver is free to assign arbitrarily large tilts that cancel along the
+observed direction. Exactly the failure of §1.6's plane-fit, one level up.
+
+**The rule this suggests:** in a corridor capture, *any* parameter that is only
+observed along the driven path is under-determined in the perpendicular
+direction, no matter how many observations you have — because the observations
+are not independent samples of a 2-D field, they are a 1-D curve embedded in
+one. Counting observations is not a test of conditioning.
+
+The consequence is that a rotated chunk **cannot be corrected from corridor
+overlaps alone**. Fixing it needs an absolute reference with genuine 2-D
+support — lidar DTM is the obvious candidate — which promotes "absolute datum"
+from a nicety to a requirement at network scale. That is now open problem 1.
+
 ### 1.7 Cost structure, and the scaling trap
 
 Measured unit costs (GH200, per chunk):
