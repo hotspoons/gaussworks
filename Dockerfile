@@ -69,7 +69,9 @@ RUN git clone --depth 1 -b ${COLMAP_VER} https://github.com/colmap/colmap /tmp/c
         -DCMAKE_PREFIX_PATH=/opt/sfm \
         -DCMAKE_INSTALL_PREFIX=/opt/sfm \
     && cmake --build /tmp/colmap/build --target install \
-    && cp -r /tmp/colmap/pycolmap /tmp/pycolmap \
+    && mkdir -p /tmp/pycolmap-src \
+    && cp -r /tmp/colmap/pycolmap /tmp/pycolmap-src/pycolmap \
+    && cp -r /tmp/colmap/src /tmp/pycolmap-src/src \
     && rm -rf /tmp/colmap
 
 # GLOMAP: global SfM, much faster than incremental mapper on road sequences
@@ -158,10 +160,22 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 # any version, and even on x86 the published wheel is a different COLMAP (4.2.0) from the
 # binaries this image carries (3.11.1) -- and gsplat uses it to READ the reconstruction
 # those binaries WROTE.
-COPY --from=sfm-builder /tmp/pycolmap /tmp/pycolmap
-RUN CMAKE_PREFIX_PATH=/opt/sfm \
+# BOTH pycolmap/ AND src/, because pycolmap's CMakeLists globs its sources from OUTSIDE
+# its own directory:
+#     file(GLOB_RECURSE SOURCE_FILES "${PROJECT_SOURCE_DIR}/../src/pycolmap/*.cc")
+#     target_include_directories(_core PRIVATE ${PROJECT_SOURCE_DIR}/../src/)
+# Copying pycolmap/ alone leaves that glob matching nothing, and a GLOB that matches
+# nothing is not an error -- it produces an empty target and fails much later, and
+# somewhere else entirely:
+#     CMake Error ... FindPython/Support.cmake (add_library):
+#       No SOURCES given to target: _core
+# which reads like a Python or pybind11 problem and is neither. The `test` below turns
+# that into an immediate, honest failure.
+COPY --from=sfm-builder /tmp/pycolmap-src /tmp/pycolmap-src
+RUN test "$(ls /tmp/pycolmap-src/src/pycolmap/*.cc 2>/dev/null | wc -l)" -gt 0 \
+    && CMAKE_PREFIX_PATH=/opt/sfm \
     SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS};-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF" \
-    pip install --no-cache-dir /tmp/pycolmap && rm -rf /tmp/pycolmap
+    pip install --no-cache-dir /tmp/pycolmap-src/pycolmap && rm -rf /tmp/pycolmap-src
 
 RUN git clone --recursive https://github.com/nerfstudio-project/gsplat /opt/gsplat \
     && cd /opt/gsplat && git checkout ${GSPLAT_REF} \
