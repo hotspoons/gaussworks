@@ -2,6 +2,7 @@
 """splatpipe CLI: ingest -> chunk -> poses -> train."""
 
 import argparse
+import sys
 from pathlib import Path
 
 import yaml
@@ -151,6 +152,21 @@ def main():
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("ckpts", nargs="+", type=Path)
     s.add_argument("--test-every", type=int, default=8)
+    s.add_argument("--at-width", type=int,
+                   help="render and score at this width instead of the training width. "
+                        "Required to compare models trained at different resolutions: at "
+                        "their own widths the higher-resolution one is scored against a "
+                        "harder target and the numbers are not comparable")
+
+    s = sub.add_parser("seams", help="do neighbouring chunks agree about the road's height?")
+    s.add_argument("--chunks", required=True, type=Path)
+    s.add_argument("--within", type=Path,
+                   help="another world's chunks dir: restrict to chunks inside its "
+                        "footprint. Comparing a whole survey against a bake of one "
+                        "street otherwise credits the small bake for not containing "
+                        "the survey's sparse fringes, which is where bad seams live")
+    s.add_argument("--fail-over", type=float, metavar="M",
+                   help="exit non-zero if the worst seam exceeds M metres (for CI)")
 
     s = sub.add_parser("merge", help="chunk splats -> one streamable world (tiles + world.json)")
     s.add_argument("--chunks", required=True, type=Path)
@@ -345,7 +361,7 @@ def main():
 
     elif args.cmd == "eval":
         from .evaluate import evaluate
-        evaluate(args.chunk, args.ckpts, test_every=args.test_every)
+        evaluate(args.chunk, args.ckpts, test_every=args.test_every, at_width=args.at_width)
 
     elif args.cmd == "run":
         from .run import run
@@ -354,6 +370,10 @@ def main():
     elif args.cmd == "lod":
         from .lod import build
         build(args.world, keep=args.keep, sh=args.sh, name=args.name)
+
+    elif args.cmd == "seams":
+        from .seams import report
+        return report(args.chunks, within=args.within, fail_over=args.fail_over)
 
     elif args.cmd == "merge":
         from .merge import merge
@@ -408,4 +428,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main() RETURNS a status for the subcommands that can fail (seams
+    # --fail-over). Dropping it here would make the failure print and the
+    # process succeed, which is worse than having no check at all.
+    sys.exit(main())
