@@ -319,6 +319,158 @@ because the rig is moving.
 
 ---
 
+---
+
+## Entry 2 — Gosheff Lane, 2026-09-27: the metric and the defect
+
+Entry 1 ended with a world that registered cleanly and drove badly. This entry is about the
+gap between those two sentences, and it turned out to be a story about *measurement* rather
+than about reconstruction. Every failure below is a case of the number moving while the defect
+stayed, or the defect moving while the number stayed.
+
+The practical question was narrow: a second bake of one street at higher settings *looked*
+better — was it, and was it worth 5.9× the bytes? Answering it required three separate
+corrections to how we were measuring, and the third one changed the conclusion.
+
+### 2.1 PSNR is not comparable across training resolutions — by 0.13 dB
+
+The survey bake renders views at 1620 px; the high-quality bake at 2160 px. Both reported PSNR
+against their own held-out views, and those numbers were being read side by side. They are not
+comparable: a model trained at 2160 px is scored against a target containing high-frequency
+detail that simply does not exist in the 1620 px target. More pixels is a harder exam.
+
+So we added `eval --at-width`, which renders both at a common width — scaling intrinsics,
+downsampling ground truth with `INTER_AREA` (so the model is not penalised for failing to
+reproduce aliasing we introduced ourselves) and the vehicle mask with `INTER_NEAREST` (so the
+rig stays excluded rather than being feathered into the comparison).
+
+**The correction was worth 0.13 dB.** The direction was right and the magnitude was wrong by
+roughly an order of magnitude against expectation.
+
+This is worth recording precisely *because* it is a negative result. The hypothesis was
+plausible, the reasoning was sound, and the effect was negligible — and there was no way to
+know that without building the instrument. The cost of measuring your own correction is
+usually small next to the cost of carrying an unquantified worry through every subsequent
+comparison. A worry cannot be traded off against anything; 0.13 dB can.
+
+With that settled, the fair comparison over the same ground:
+
+| | PSNR (visible, @1620 px) | bytes / 1000 m² |
+|---|---|---|
+| survey | 21.43 dB | 2.7 MB |
+| high-quality | 22.14 dB | 15.8 MB |
+
+**+0.7 dB for 5.9× the storage.** On that evidence the expensive bake is not worth it.
+
+Except that PSNR was never measuring the thing anyone had complained about.
+
+### 2.2 The metric that tracks the defect
+
+The reported problem was not softness. It was a *step in the road*, and splats hanging above
+the road surface on one side of it. That is §1.4's disease — chunks levelled independently
+against their own GPS priors — and PSNR is close to blind to it, because PSNR is dominated by
+large smooth regions and barely moves when a chunk sits half a metre wrong.
+
+The invariant is free, in the §1.2 sense. Chunks overlap by design, so wherever two chunks'
+camera paths pass through the same place, *their heights must agree*. Disagreement there is not
+noise to be averaged; it is the defect, already localised to a pair. Measured over the same
+ground:
+
+| | seams | median \|dz\| | worst |
+|---|---|---|---|
+| survey | 6 | 0.82 m | **4.88 m** |
+| high-quality | 8 | 0.53 m | **1.44 m** |
+
+Two seams near 4.8 m in the survey; nothing above 3 m anywhere in the high-quality bake.
+
+Put the two tables together and the point is stark: **over identical ground, PSNR separates
+these worlds by 0.7 dB while the worst seam separates them by 3.4 m.** One of those numbers
+tracks what a driver hits and the other does not. We had been optimising, comparing and
+reporting the one that does not, for no better reason than that it is the number the
+literature reports — and the literature reports it because bounded scenes do not *have* seams.
+
+The general form: **when you move a technique to a new regime, the field's standard metric
+travels with it and its validity does not.** The metric was not wrong for bounded scenes. It
+became wrong when partitioning was introduced, because partitioning created a failure mode
+that the metric cannot see.
+
+### 2.3 Scope is a confounder when worlds differ in extent
+
+The first version of that comparison used each world's *whole* extent, and the survey looked far
+worse — worst seam 13.68 m, twelve chunks in >3 m disagreements. That comparison is invalid.
+The survey covers 1.16 km² including sparse fringes driven once under canopy; the
+high-quality bake covers 0.13 km² of well-covered street. The fringes are where the bad seams
+live, so a whole-world comparison credits the small bake for *not containing the hard parts*.
+
+`seams --within <other world's chunks>` restricts to chunks at least 30% inside the other
+world's footprint. That is what produces the 4.88 m figure above, and it is the honest one.
+Worth stating plainly because the invalid comparison flatters the conclusion we already
+believed, which is exactly when a comparison needs checking hardest.
+
+### 2.4 Two variables, one config
+
+The high-quality config changed *both* resolution (`px_per_deg` 18→24, `spacing_m` 1.75→1.1,
+`jpeg_quality` 95→97) and chunk geometry (`cell_m` 200→120, `spatial_radius` 12→20), then beat
+the survey on both metrics. It therefore cannot say which change earned which win — and the two
+halves have wildly different costs. Resolution costs 5.9× the bytes. Smaller cells cost
+essentially nothing in storage.
+
+The hypothesis is that they map cleanly onto the two metrics: pixels buy PSNR, and smaller
+cells buy seam agreement, because a shorter chunk accumulates less drift before it has to agree
+with its neighbour. If that holds, the defect that actually matters is fixed by the free half,
+and re-baking a whole neighbourhood stays affordable.
+
+A control is running as this is written: survey resolution, high-quality geometry, one
+variable. Note that `spatial_radius` had to be held at 12 rather than copied — §1.3's lesson,
+that the radius is counted in *capture positions* while the error it must cover is in metres.
+The control keeps the survey's 1.75 m spacing, so 12 positions reach 21 m, against the
+high-quality bake's 20 × 1.1 = 22 m. Copying the 20 would have reached 35 m and quietly made
+this a two-variable experiment again.
+
+*Result to be recorded here when it lands.*
+
+### 2.5 Two checks that could not fail, in one afternoon
+
+Entry 1 closed on a check that could not fail. Two more, both mine, both caught only by
+deliberate adversarial testing:
+
+**A grep that swallowed a crash.** The fair-resolution comparison ran as
+`splatpipe eval ... 2>&1 | grep -a "PSNR"`. The job produced *no output whatsoever*. The cause
+was a `SyntaxError` in an edit made minutes earlier — and because the filter selected only the
+success string, a crash and a clean run that happened to print nothing were indistinguishable.
+The filter was reporting on itself.
+
+**A failure that exited zero.** The new `seams --fail-over` threshold printed `FAIL` and
+returned a status that `main()` was discarding, so the process exited 0. A CI gate built on it
+would have been strictly worse than no gate: it would have produced a green tick and the
+authority that comes with one.
+
+Both are the same shape, and it is the shape §1.2 warned about from the other side. *Silence is
+not success.* A monitor, a filter, or a gate must be shown to emit something on the failure path
+before its silence means anything. The discipline that catches it is cheap and mechanical: after
+writing a check, **make it fail on purpose**. `seams` against `--fail-over 3.0` exits 0 and
+against `--fail-over 0.5` exits 1 on the same world — that pair of runs is what makes the
+threshold trustworthy, and neither run alone would.
+
+This is not a splat problem. It is the dominant failure mode of automated verification in
+general, and it is more dangerous than an absent check because it manufactures confidence.
+
+### 2.6 What this entry actually changed
+
+Not the reconstruction. The instruments:
+
+- PSNR is now reported at a stated common width or not compared at all;
+- seam agreement is a first-class command with a CI threshold, and is the number that gates a
+  world as driveable;
+- comparisons across worlds of different extent are restricted to shared ground;
+- checks are verified to fail before their passes are believed.
+
+The reconstruction improvements of Entry 1 were found *by* instruments like these. That is the
+pattern worth extracting: in a regime where the standard metrics were validated somewhere else,
+**the highest-leverage work is often building the measurement, not improving the model.** Three
+of the last four real improvements to this pipeline came from noticing that a number did not
+mean what it appeared to mean.
+
 ## Open problems
 
 Ordered by how much they will hurt at network scale.
@@ -345,6 +497,14 @@ Ordered by how much they will hurt at network scale.
    the worst floaters; a principled transient-aware formulation is untouched here.
 7. **The cost/quality conflict of §1.7.** Smaller cells fix topology violations and multiply
    training cost. Is there a formulation where chunk count and training budget decouple?
+8. **A driveability metric, not a seam metric.** §2.2's seam agreement catches steps between
+   chunks. It says nothing about error *within* a chunk, and nothing about lateral or along-track
+   error — the reported misalignment of ~2 m to the east is invisible to it. The general problem:
+   what is the smallest set of free invariants that bounds every way a corridor world can be
+   wrong in a way a driver notices?
+9. **Seam count versus seam size.** Smaller cells appear to tighten each seam while creating more
+   of them (§2.4). Those trade against each other and we have no model of the exchange rate —
+   at some cell size the accumulated many-small-steps must overtake the few-large-steps regime.
 
 ## Anti-patterns, collected
 
@@ -360,4 +520,11 @@ Short list, all paid for:
 - **stitching** a 360 sphere before reconstruction (§1.9)
 - checking a cluster is idle by **grepping pod names** instead of asking the scheduler
   — not a splat problem, but the same shape: a check that cannot fail
+- comparing **PSNR across training resolutions** (§2.1) — though the correction is only 0.13 dB
+- optimising the field's **standard metric** after changing the regime that validated it (§2.2)
+- comparing worlds of **different extent** without restricting to shared ground (§2.3)
+- changing **resolution and geometry in one config** and reading the result as either (§2.4)
+- filtering a log for the **success string**, so a crash and a clean run look identical (§2.5)
+- a gate whose **failure path exits zero** — worse than no gate, because it manufactures
+  confidence (§2.5)
 
