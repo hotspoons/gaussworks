@@ -150,6 +150,14 @@ def main():
                    help="skip corridor pruning (keeps gaussians no camera observed)")
     s.add_argument("--single", action="store_true", help="also write one world.ply")
 
+    s = sub.add_parser("lod", help="cheaper copies of a merged world's tiles (far / probe LOD)")
+    s.add_argument("--world", required=True, type=Path, help="merge output dir")
+    s.add_argument("--keep", type=float, default=0.125,
+                   help="fraction of gaussians to keep, ranked by opacity x footprint")
+    s.add_argument("--sh", action="store_true",
+                   help="keep spherical harmonics (default: drop bands 1-3, ~73%% of the bytes)")
+    s.add_argument("--name", default="far", help="LOD name; written to tiles_<name>/")
+
     s = sub.add_parser("mesh", help="trained splat -> textured mesh (depth fusion)")
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("--ckpt", type=Path)
@@ -317,6 +325,10 @@ def main():
     elif args.cmd == "eval":
         from .evaluate import evaluate
         evaluate(args.chunk, args.ckpts, test_every=args.test_every)
+
+    elif args.cmd == "lod":
+        from .lod import build
+        build(args.world, keep=args.keep, sh=args.sh, name=args.name)
 
     elif args.cmd == "merge":
         from .merge import merge
