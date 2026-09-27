@@ -1,0 +1,68 @@
+# One small area, at the quality the survey settings deliberately gave up.
+#
+# configs/arrowhead.yaml is a SURVEY: 18 px/deg and 1.75 m spacing, chosen to cover
+# 12 km of road in an evening. This config covers ~350 m of Gosheff Lane instead and
+# spends the difference on the things that actually bound reconstruction quality.
+#
+# What changes, and why each one and not the others:
+#
+#   px_per_deg 18 -> 24    The source EAC is ~21 px/deg, so 18 was UNDERSAMPLING it and
+#                          24 is the profile's own default. Views go 1620x1216 ->
+#                          2160x1620, i.e. 1.8x the pixels, and every one of them is a
+#                          real measurement rather than an interpolated one. This is the
+#                          single honest resolution lever.
+#   spacing_m 1.75 -> 1.1  More viewpoints per metre of road. Worth less than it looks --
+#                          extract_fps caps how many candidates exist at speed -- but on
+#                          a slow residential street it does bite.
+#   cell_m 200 -> 120      Smaller cells mean each reconstruction covers less road, so a
+#                          fixed gaussian budget is spent more densely, AND it is the
+#                          documented fix for two roads sharing one cell.
+#
+# What does NOT change, and must not:
+#
+#   fov 90, pitch -10      These are not free parameters. Widening the fov pushes the
+#                          planned views outward until they cross the lens boundary, and
+#                          that puts stitched ghosts into the reconstruction that no
+#                          later stage removes (docs/SEAM.md). Resolution is safe to
+#                          raise; angle is not.
+campaign:
+  name: gosheff-hq
+  anchor: "Gosheff Lane, east end (38.978957, -76.683593)"
+  roads:
+    - "Gosheff Lane"
+
+ingest:
+  fov: 90
+  px_per_deg: 24
+  pitch: [-10]
+  extract_fps: 6
+  spacing_m: 1.1
+  jpeg_quality: 97
+  # only the footage that comes near this point is decoded at all; `ingest` skips whole
+  # segments on the GPS track without touching the video, which is what makes a
+  # high-resolution pass over one street affordable.
+  near: "38.978957,-76.683593"
+  radius_m: 350
+
+chunk:
+  origin: {lat: 38.98138, lon: -76.69057}   # the same site anchor, so this world is
+                                            # directly comparable to arrowhead-2026-09
+  cell_m: 120
+  overlap_m: 40
+  min_frames: 20
+
+corridor:
+  radius_m: 25
+  height_margin_m: 8
+  min_spacing_m: 5
+  gap_m: 30
+  gap_s: 30
+
+poses:
+  matcher: spatial
+  align: true
+  # 12 positions, not 4. At 1.1 m spacing that is ~13 m of reach -- and the GPS error
+  # that broke the survey run was 15-19 m, so this needs watching: tighter frame spacing
+  # makes a radius in POSITIONS reach FEWER METRES. See the note in arrowhead.yaml.
+  spatial_radius: 20
+  loop_closure: none

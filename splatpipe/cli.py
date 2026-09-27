@@ -7,6 +7,15 @@ from pathlib import Path
 import yaml
 
 
+def _near(v) -> tuple[float, float] | None:
+    """Accept "lat,lon" or [lat, lon]; None means no filter."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return tuple(float(x) for x in v.split(","))  # type: ignore[return-value]
+    return (float(v[0]), float(v[1]))
+
+
 def _origin(v) -> tuple[float, float] | None:
     """Accept "lat,lon" from the CLI, or {lat, lon} / [lat, lon] from a config."""
     if v is None:
@@ -150,6 +159,13 @@ def main():
                    help="skip corridor pruning (keeps gaussians no camera observed)")
     s.add_argument("--single", action="store_true", help="also write one world.ply")
 
+    s = sub.add_parser("run", help="one capture end to end (leader/worker, for a JobSet)")
+    s.add_argument("--capture", required=True, type=Path, help="dir holding capture.json and video/")
+    s.add_argument("--out", required=True, type=Path, help="where world.json and tiles/ are published")
+    s.add_argument("--role", choices=["leader", "worker"], default="leader")
+    s.add_argument("--site", type=Path, help="the baked world, for levelling against its lidar")
+    s.add_argument("--work", type=Path, help="scratch (default: <out>/.work)")
+
     s = sub.add_parser("lod", help="cheaper copies of a merged world's tiles (far / probe LOD)")
     s.add_argument("--world", required=True, type=Path, help="merge output dir")
     s.add_argument("--keep", type=float, default=0.125,
@@ -237,8 +253,13 @@ def main():
             hwaccel=args.hwaccel or cfg.get("hwaccel"),
             jobs=args.jobs or cfg.get("jobs", 0),
             start_s=args.start_s, duration_s=args.duration_s,
-            near=(tuple(float(v) for v in args.near.split(",")) if args.near else None),
-            radius_m=args.radius_m, segment_s=args.segment_s,
+            # `near`/`radius_m` fall back to the config like every other ingest
+            # setting. A campaign that is DEFINED by a place -- one street at high
+            # resolution -- could otherwise not say so in its own file, and the
+            # location would live in whatever shell history invoked it.
+            near=_near(args.near if args.near else cfg.get("near")),
+            radius_m=args.radius_m or cfg.get("radius_m", 400.0),
+            segment_s=args.segment_s,
             no_telemetry=args.no_telemetry)
 
     elif args.cmd == "mapillary":
@@ -325,6 +346,10 @@ def main():
     elif args.cmd == "eval":
         from .evaluate import evaluate
         evaluate(args.chunk, args.ckpts, test_every=args.test_every)
+
+    elif args.cmd == "run":
+        from .run import run
+        run(args.capture, args.out, args.role, args.config, site=args.site, work=args.work)
 
     elif args.cmd == "lod":
         from .lod import build
