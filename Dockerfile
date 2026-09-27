@@ -39,7 +39,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # in the whole pipeline. Building it here is what makes that flag real; poses.py
 # probes colmap's linkage (cuSOLVER/cuSPARSE) before passing it.
 ARG CERES_VER=2.2.0
+# Ceres 2.2.0 OVERRIDES the architecture list. CMakeLists.txt line ~252 does a plain
+#     set(CMAKE_CUDA_ARCHITECTURES "50;60;70;80")
+# with no `if (NOT DEFINED ...)` and no cache, so -DCMAKE_CUDA_ARCHITECTURES is ignored
+# and nvcc is handed compute_50 -- which CUDA 13 dropped:
+#     nvcc fatal : Unsupported gpu architecture 'compute_50'
+# There is no option to set instead, so the line is patched. The `grep -q` after it makes
+# the patch ASSERT ITSELF: if a later Ceres writes that line differently the build fails
+# here and loudly, rather than quietly compiling for architectures the fleet does not
+# have. (scripts/pod-build-stack.sh never hit this -- it takes libceres-dev from apt,
+# which has no CUDA at all. This is the path that actually gets GPU bundle adjustment.)
 RUN git clone --depth 1 -b ${CERES_VER} https://github.com/ceres-solver/ceres-solver /tmp/ceres \
+    && sed -i "s/set(CMAKE_CUDA_ARCHITECTURES \"50;60;70;80\")/set(CMAKE_CUDA_ARCHITECTURES \"${CUDA_ARCHS}\")/" /tmp/ceres/CMakeLists.txt \
+    && grep -q "set(CMAKE_CUDA_ARCHITECTURES \"${CUDA_ARCHS}\")" /tmp/ceres/CMakeLists.txt \
     && cmake -S /tmp/ceres -B /tmp/ceres/build -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
