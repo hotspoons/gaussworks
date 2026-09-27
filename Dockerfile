@@ -105,8 +105,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # scikit-build-core uses that instead and pybind11's python_add_library fails with
 # "No SOURCES given to target: _core". Installing cmake here to be helpful is what
 # caused that build. The -dev packages below are here because pycolmap is COMPILED in
-# this stage: includes COLMAP's headers, which include Eigen, Boost, SQLite3 and the rest, so the
-# runtime stage needs the same set the builder did. Discovered the expensive way --
+# this stage: it includes COLMAP's headers, which pull in Eigen, Boost, SQLite3 and the
+# rest, so this stage needs the same set the builder had. Discovered the expensive way --
 # "Could NOT find SQLite3" after thirty minutes of Ceres, COLMAP and GLOMAP compiling
 # perfectly. Adding them one per failed build costs half an hour each; this is the set
 # that is already known to build COLMAP.
