@@ -89,7 +89,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The -dev boost/ceres packages are the lazy way to satisfy the copied
 # binaries' shared libs; fine for a dev image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libimage-exiftool-perl \
+    ffmpeg libimage-exiftool-perl curl ca-certificates \
     libboost-program-options-dev libboost-graph-dev libboost-system-dev \
     libfreeimage-dev libmetis-dev libgoogle-glog-dev libgflags-dev \
     libceres-dev libflann-dev libsuitesparse-dev libglew-dev \
@@ -102,9 +102,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # from a camera that never got a fix, and quietly disables geo alignment,
 # locality chunking and distance-based frame spacing. Ubuntu 24.04 ships 12.76.
 ARG EXIFTOOL_VERSION=13.44
-RUN curl -fsSL "https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz" \
-      | tar xz -C /opt \
-    && mv "/opt/Image-ExifTool-${EXIFTOOL_VERSION}" /opt/exiftool \
+# From the GitHub TAG MIRROR, not exiftool.org. exiftool.org serves only the NEWEST
+# release, so a pinned version 404s there the moment one is cut -- measured: 13.44 is
+# already gone from exiftool.org and present on the mirror. scripts/pod-build-stack.sh
+# has used the mirror for exactly this reason; this file had not caught up.
+RUN mkdir -p /opt/exiftool \
+    && curl -fsSL "https://github.com/exiftool/exiftool/archive/refs/tags/${EXIFTOOL_VERSION}.tar.gz" \
+      | tar xz -C /opt/exiftool --strip-components=1 \
     && ln -sf /opt/exiftool/exiftool /usr/local/bin/exiftool \
     && exiftool -ver
 
