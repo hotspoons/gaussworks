@@ -1,0 +1,60 @@
+# The control for gosheff-hq: geometry knobs only, survey resolution.
+#
+# gosheff-hq changed two unrelated kinds of thing at once, and then beat the
+# survey on both counts, so it could not say WHICH change did the work:
+#
+#   resolution   px_per_deg 18 -> 24, spacing_m 1.75 -> 1.1, jpeg_quality 95 -> 97
+#   geometry     cell_m 200 -> 120, spatial_radius 12 -> 20
+#
+# Measured against arrowhead over the same ground, hq won +0.5 dB PSNR (at a
+# common render width, so that is a real +0.5) and cut the worst seam from
+# 4.88 m to 1.44 m -- while costing 5.9x the bytes per square metre.
+#
+# Those two wins almost certainly have different causes. PSNR is what more
+# pixels buy. Seam agreement is what smaller cells buy: a shorter chunk
+# accumulates less drift before it has to meet its neighbour. If that is
+# right, the defect Rich actually reported -- steps in the road, splats
+# floating over the surface -- is fixed by the half of the config that is
+# free, and a whole-neighbourhood re-bake stays affordable.
+#
+# So this config takes the geometry and leaves the resolution alone. If seams
+# come out near hq's 1.44 m rather than arrowhead's 4.88 m, the expensive half
+# is optional and we re-bake the world at survey cost.
+campaign:
+  name: gosheff-geo
+  anchor: "Gosheff Lane, east end (38.978957, -76.683593)"
+  roads:
+    - "Gosheff Lane"
+
+ingest:
+  fov: 90
+  pitch: [-10]
+  # IDENTICAL to configs/arrowhead.yaml. This is the half being held fixed;
+  # changing any of these three would make the experiment unreadable.
+  px_per_deg: 18
+  extract_fps: 6
+  spacing_m: 1.75
+  jpeg_quality: 95
+  near: "38.978957,-76.683593"
+  radius_m: 350
+
+chunk:
+  origin: {lat: 38.98138, lon: -76.69057}   # the shared site anchor, as both siblings use
+  cell_m: 120
+  overlap_m: 40
+  min_frames: 20
+
+corridor:
+  radius_m: 25
+  height_margin_m: 8
+  min_spacing_m: 5
+
+poses:
+  matcher: spatial
+  align: true
+  # 12, not hq's 20 -- because what matters is the reach in METRES and this
+  # config keeps the survey's 1.75 m spacing. 12 x 1.75 = 21 m, against hq's
+  # 20 x 1.1 = 22 m. Copying hq's 20 here would have reached 35 m and quietly
+  # made this a two-variable experiment again.
+  spatial_radius: 12
+  loop_closure: none
