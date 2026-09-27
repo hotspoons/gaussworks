@@ -23,7 +23,7 @@ def _val_indices(n: int, test_every: int = 8) -> list[int]:
 
 
 def evaluate(chunk: Path, ckpts: list[Path], examples: Path | None = None,
-             test_every: int = 8) -> dict:
+             test_every: int = 8, at_width: int | None = None) -> dict:
     import cv2                                     # noqa: PLC0415
     import torch                                   # noqa: PLC0415
     from gsplat import rasterization               # noqa: PLC0415
@@ -55,6 +55,25 @@ def evaluate(chunk: Path, ckpts: list[Path], examples: Path | None = None,
             gt = cv2.cvtColor(cv2.imread(parser.image_paths[i]),
                               cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
             h, w = gt.shape[:2]
+            keep = masks.get(cam_id)
+            if at_width and at_width != w:
+                # Render and score at a COMMON width. Two models trained at different
+                # view resolutions cannot be compared at their own: the higher-resolution
+                # one is scored against ground truth carrying far more high-frequency
+                # detail, so equal PSNR means a harder target met, not equal quality --
+                # and the number says nothing about which world looks better.
+                # INTER_AREA because this is a downscale; anything else aliases the
+                # ground truth and scores the model against the aliasing.
+                sc = at_width / w
+                nh = max(1, int(round(h * sc)))
+                gt = cv2.resize(gt, (at_width, nh), interpolation=cv2.INTER_AREA)
+                if keep is not None:
+                    keep = cv2.resize(keep.astype(np.uint8), (at_width, nh),
+                                      interpolation=cv2.INTER_NEAREST) > 0
+                K = K.clone()
+                K[0, :] *= sc
+                K[1, :] *= sc
+                h, w = nh, at_width
             with torch.no_grad():
                 img, _, _ = rasterization(
                     splats["means"], splats["quats"], splats["scales"],
@@ -62,13 +81,13 @@ def evaluate(chunk: Path, ckpts: list[Path], examples: Path | None = None,
                     torch.linalg.inv(c2w)[None], K[None], w, h,
                     sh_degree=sh_degree, render_mode="RGB")
             pred = img[0].clamp(0, 1).cpu().numpy()
-            keep = masks.get(cam_id)
             diff = (pred - gt) if keep is None else (pred - gt)[keep]
             psnrs.append(10 * np.log10(1.0 / max(float((diff ** 2).mean()), 1e-12)))
         results[str(ckpt)] = {"psnr_visible": round(float(np.mean(psnrs)), 3),
-                              "views": len(idx),
+                              "views": len(idx), "at_width": at_width,
                               "gaussians": int(len(splats["means"]))}
+        at = f"@{at_width}px  " if at_width else ""
         print(f"[eval] {Path(ckpt).parent.parent.name:22s} "
-              f"PSNR(visible) {results[str(ckpt)]['psnr_visible']:6.2f} dB  "
+              f"PSNR(visible) {results[str(ckpt)]['psnr_visible']:6.2f} dB  {at}"
               f"{results[str(ckpt)]['gaussians']:>8,} gaussians", flush=True)
     return results
