@@ -82,5 +82,25 @@ poses:
   # the case where a missed cross-pass pair splits one reconstruction in two.
   # Left at the defaults until the ingest GPS verdict is in -- if the track
   # wanders, raise spatial_radius and/or set loop_closure: vocab.
-  spatial_radius: 4
+  # MEASURED, not guessed. spatial_radius is a reach in CAPTURE POSITIONS, and
+  # at this capture's 2.35 m spacing 4 positions is only ~9 m. GPS error under
+  # the canopy here reaches 15-19 m (per-chunk median DOP up to 19), so on the
+  # return pass the prior pointed at the WRONG STRETCH of road: the two passes
+  # never matched each other and the global mapper floated them apart
+  # vertically. A driver sees that as the world twisting and then flattening.
+  #
+  # 12 positions is ~28 m of reach, which covers the error. Measured on
+  # chunk_x0_y-2, the worst tile in the world:
+  #
+  #                     overlap pairs   median dz   max dz
+  #   spatial_radius 4         56         7.75 m    17.03 m
+  #   spatial_radius 12       769         1.41 m     1.79 m
+  #
+  # It costs matching time -- 432 neighbour pairs against 96, so roughly 4.5x
+  # -- which is the right trade against a world that cannot be driven.
+  spatial_radius: 12
+  # Still none, and now for a measured reason rather than caution: retrieval
+  # matching made this capture WORSE (see poses.py). A subdivision is built
+  # from a handful of house plans, so it matches different houses of the same
+  # design. Widening the SPATIAL radius stays local; loop closure does not.
   loop_closure: none
