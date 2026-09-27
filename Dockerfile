@@ -171,10 +171,17 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 #       No SOURCES given to target: _core
 # which reads like a Python or pybind11 problem and is neither. The `test` below turns
 # that into an immediate, honest failure.
+#
+# GENERATE_STUBS=OFF for the same reason, found the same way: it is ON by default, and
+# the stub step shells out to ruff with `${PROJECT_SOURCE_DIR}/../ruff.toml` -- a third
+# file outside the directory being built:
+#     error: invalid value '/tmp/pycolmap-src/ruff.toml' for '--config'
+# after five and a half minutes of successful compilation. Stubs are type hints for an
+# editor; this is a runtime image and has no use for them.
 COPY --from=sfm-builder /tmp/pycolmap-src /tmp/pycolmap-src
 RUN test "$(ls /tmp/pycolmap-src/src/pycolmap/*.cc 2>/dev/null | wc -l)" -gt 0 \
     && CMAKE_PREFIX_PATH=/opt/sfm \
-    SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS};-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF" \
+    SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS};-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF;-DGENERATE_STUBS=OFF" \
     pip install --no-cache-dir /tmp/pycolmap-src/pycolmap && rm -rf /tmp/pycolmap-src
 
 RUN git clone --recursive https://github.com/nerfstudio-project/gsplat /opt/gsplat \
