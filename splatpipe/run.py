@@ -80,7 +80,7 @@ def _wait_for_chunks(work: Path, timeout_s: float) -> Path:
 GATE_FILE = ".seam-gate.json"
 
 
-def _seam_gate(chunks: Path, fail_over: float | None) -> dict:
+def _seam_gate(chunks: Path, fail_over: float | None, out: Path | None = None) -> dict:
     """Decide whether this world is worth training, and record the verdict.
 
     Seam agreement reads corridor.json, which POSES produces -- so a world can
@@ -88,10 +88,23 @@ def _seam_gate(chunks: Path, fail_over: float | None) -> dict:
     arrowhead re-bake that is ~2 GPU-hours against ~11, which is the difference
     between iterating on a neighbourhood and not.
 
-    The verdict is written for the WORKERS, not for us: they train too, and a
-    leader that merely exits would leave them grinding on a world it has
-    already rejected. Written on the skip path as well, so its absence always
-    means something went wrong rather than "gate disabled".
+    The verdict goes to three places, because three different readers need it
+    and only one of them can see the scratch volume:
+
+      <chunks>/.seam-gate.json   the WORKERS. They train too, and a leader that
+                                 merely exits would leave them grinding on a
+                                 world it has already rejected.
+      <out>/seam-gate.json       the SCHEDULER. `out` is the published world
+                                 dir, which is the one path a caller is
+                                 guaranteed to be able to read -- `chunks`
+                                 lives under `work`, which is scratch and which
+                                 the world editor cannot mount. Written even
+                                 when the gate FAILS and nothing else is
+                                 published, which is exactly when it is needed.
+      stdout, one line, machine-readable   anyone with only pod logs.
+
+    Written on the skip path as well, so its absence always means something
+    went wrong rather than "gate disabled".
     """
     from .seams import measure
 
@@ -120,7 +133,16 @@ def _seam_gate(chunks: Path, fail_over: float | None) -> dict:
                   f"{'PASS' if ok else 'FAIL'}", flush=True)
             if not ok:
                 print(f"[run] chunks over the bar: {verdict['offenders']}", flush=True)
-    (chunks / GATE_FILE).write_text(json.dumps(verdict, indent=1))
+    blob = json.dumps(verdict, indent=1)
+    (chunks / GATE_FILE).write_text(blob)
+    if out is not None:
+        # mkdir here, not at publish time: on a FAILED gate nothing is ever
+        # published, and the failure is the thing the caller most needs to read.
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "seam-gate.json").write_text(blob)
+    # One line, prefix-tagged and compact, so a log scraper needs no volume at
+    # all: `grep -o 'seam-gate-json .*' | ...`
+    print(f"[run] seam-gate-json {json.dumps(verdict, separators=(',', ':'))}", flush=True)
     return verdict
 
 
@@ -217,7 +239,7 @@ def run(capture: Path, out: Path, role: str, config: str | None,
               spatial_radius=pcfg.get("spatial_radius", 4),
               loop_closure=pcfg.get("loop_closure", "none"))
     _wait_for_stage(chunks, "poses", timeout_s)
-    gate = _seam_gate(chunks, seam_fail_over)
+    gate = _seam_gate(chunks, seam_fail_over, out=out)
     if not gate["ok"]:
         # Non-zero, with the number on stdout: a scheduler's run object then
         # fails visibly instead of publishing a world nobody trusts.
