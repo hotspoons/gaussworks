@@ -646,6 +646,76 @@ Worth generalising: when a defect survives every setting you vary, stop varying 
 question "what is structurally different about how we do this?" is cheap, and we reached for it
 third.
 
+---
+
+## Entry 4 — 2026-09-28: the ordering fix, and a metric that stopped meaning anything
+
+Entry 3 said the defect was architectural and predicted that solving globally before
+partitioning would remove it. Built and measured on gosheff, same nine cells, ONE variable — the
+order:
+
+| | worst seam | median | solve |
+|---|---|---|---|
+| partition-first | 3.85 m | 0.65 m | ~2 h over 5 GPUs |
+| global, monolithic GLOMAP | **0.06 m** | 0.04 m | 2 h 39 on one GPU |
+| global, hierarchical | **0.11 m** | 0.10 m | 2 h 09 on one GPU |
+
+4,998 of 5,184 cameras in a single reconstruction. A 35–64× collapse in the worst seam.
+
+### 4.1 The metric is now an identity, and that is the point
+
+Before reporting that as a quality result, we checked what it measures. Under global-first both
+chunks inherit poses from ONE reconstruction, so overlapping corridor points may be the same
+numbers rather than agreeing numbers. They are: **88% of coincident points are bit-identical**
+(against 0% under partition-first, where the same pair differed by a median of 0.13 m).
+
+So `seams` no longer measures anything on a global-first world. That is not a defect in the fix;
+it IS the fix — chunks cannot disagree. But the number is now evidence that a failure mode is
+structurally absent, not evidence that the reconstruction is good. Any check whose passing
+condition became true *by construction* has stopped being a check, and the correct response is
+to find one that has not.
+
+### 4.2 What the seam check structurally cannot see
+
+A smoothly-wrong reconstruction is perfectly self-consistent and would still read 0.06 m. GPS is
+noisy point-to-point but unbiased over distance, so a solve that bends shows a residual GROWING
+along the route while a good one shows flat noise.
+
+First attempt was worthless: it ordered cameras by image id, which cycles through all six virtual
+cameras, so "distance along the route" ran the drive six times over and reported 56 km for a
+350 m-radius capture. Redone on one camera, sorted by frame, **with a control that injects a
+known 1 m/100 m bend to prove the test can fire** (it did, r=+0.96):
+
+    833 cam0 poses, route 1,701 m
+    east   r -0.095   slope -0.087 m/100 m
+    north  r -0.228   slope -0.057 m/100 m
+    up     r +0.496   slope +0.201 m/100 m      <- five times the horizontal axes
+
+Horizontals are clean. There is a residual vertical trend of ~0.2 m per 100 m. It sits under the
+0.5 flag threshold and is not noise — it is the corridor pitch drift the SLAM literature warns
+about for routes without good loop closure, and it is exactly the class of error §1.6a kept
+running into from the other side.
+
+Keep it in proportion: a smooth 0.2 m/100 m grade error has replaced steps of 3.85 m (and 67 m on
+the neighbourhood). A driver feels a slightly wrong gradient rather than a wall. But it is real,
+it is now the dominant geometric error, and no seam metric will ever show it.
+
+### 4.3 Checks that were confidently wrong today
+
+Three, which is the actual theme of this journal by now:
+
+1. **`seams` after global-first** — passing by construction (§4.1).
+2. **The first bend test** — a distance axis that was six laps of the route (§4.2).
+3. **A `curl` probe of GHCR** — reported the container image as unpullable (HTTP 401) while
+   containerd pulled it anonymously and ran it. The probe used an anonymous manifest HEAD, which
+   GHCR answers differently from a real pull. It cost a round trip to the user asking them to
+   change a setting that may already have been correct.
+
+Each looked authoritative. Each was answering a question adjacent to the one asked. The habit
+that catches all three is the same and it is cheap: **make the check fail on purpose before
+believing that it passed** — and where that is impossible, exercise the real mechanism rather
+than a proxy for it.
+
 ## Open problems
 
 Ordered by how much they will hurt at network scale.
@@ -680,13 +750,17 @@ Ordered by how much they will hurt at network scale.
 9. **Seam count versus seam size.** Measured in §2.4a and it is not a clean trade: smaller cells
    improved the median by a third AND made the worst seam five times worse. Median and tail move
    independently, so a single cell size cannot be tuned against both.
-10. **What makes a REGION fail?** *Probable answer in Entry 3: chunks are solved and levelled
+10. **~~What makes a REGION fail?~~** *Answered in Entry 4: nothing does, once the capture is
+   solved before it is partitioned. Original note follows. Probable answer in Entry 3: chunks are solved and levelled
    independently, so each picks its own datum, and neighbours sharing a bad GPS stretch drift
    together. Untested until the ordering is changed.* The 120 m re-bake's damage is four contiguous chunks at 18–67 m,
    not a scatter. Frame count does not predict it (§2.4a) and the reconstructions did not
    visibly fracture. Until this is understood, no config change should be claimed to fix seams —
    this is now the central open problem, and everything in §2.4 is downstream of it.
-11. **How many chunks must a trial bake contain to measure a tail?** Nine was enough for the
+11. **Corridor pitch drift.** ~0.2 m per 100 m of vertical trend survives the ordering fix
+   (§4.2), is invisible to seam agreement, and is now the dominant geometric error. The
+   literature says corridors without good loop closure resist exactly this. Untouched.
+12. **How many chunks must a trial bake contain to measure a tail?** Nine was enough for the
    median and badly insufficient for the worst case. Trials are how we iterate; not knowing the
    size at which their rare failures become measurable makes every trial result suspect.
 
