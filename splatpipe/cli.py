@@ -144,6 +144,24 @@ def main():
                         "spatial+sequential, for multi-pass chunks whose GPS "
                         "priors cannot be trusted (default: config, else none)")
 
+    s = sub.add_parser(parents=[common], name="global-solve",
+                       help="ONE reconstruction for the whole capture, before chunking")
+    s.add_argument("--frames", required=True, type=Path)
+    s.add_argument("--matcher", default="spatial")
+    s.add_argument("--spatial-radius", type=int)
+    s.add_argument("--mapper", default="auto")
+    s.add_argument("--loop-closure", default=None)
+    s.add_argument("--origin", help="lat,lon of the project ENU frame; defaults to "
+                                    "the chunk config's origin so the global model "
+                                    "lands in the same world as the cell bounds")
+
+    s = sub.add_parser(parents=[common], name="global-split",
+                       help="cut a global reconstruction into the existing chunks")
+    s.add_argument("--frames", required=True, type=Path)
+    s.add_argument("--chunks", required=True, type=Path)
+    s.add_argument("--sparse", type=Path, help="default: <frames>/sparse/0")
+    s.add_argument("--halo-m", type=float, help="default: each chunk's own overlap_m")
+
     s = sub.add_parser(parents=[common], name="train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--steps", type=int, default=30000)
@@ -368,6 +386,39 @@ def main():
                   spatial_radius=args.spatial_radius or cfg.get("spatial_radius", 4),
                   refresh=args.refresh, mapper=args.mapper,
                   loop_closure=args.loop_closure or cfg.get("loop_closure", "none"))
+
+    elif args.cmd == "global-solve":
+        from .globalsfm import solve_global
+        pcfg = _cfg(args.config, "poses")
+        ccfg = _cfg(args.config, "chunk")
+        origin = _origin(args.origin or ccfg.get("origin"))
+        if origin is None:
+            raise SystemExit("[global] no origin: pin one in the config's chunk "
+                             "section or pass --origin, or the global model will "
+                             "not share a frame with the chunk bounds")
+        solve_global(args.frames, origin,
+                     matcher=args.matcher,
+                     align=pcfg.get("align", True),
+                     spatial_radius=(args.spatial_radius if args.spatial_radius
+                                     is not None else pcfg.get("spatial_radius", 4)),
+                     mapper=args.mapper,
+                     loop_closure=(args.loop_closure or
+                                   pcfg.get("loop_closure", "none")))
+
+    elif args.cmd == "global-split":
+        from .globalsfm import split_chunk
+        from .poses import list_chunks
+        chunks = list_chunks(args.chunks)
+        if not chunks:
+            raise SystemExit(f"[global] no chunks under {args.chunks}")
+        rows = [split_chunk(args.frames, c, halo_m=args.halo_m,
+                            global_sparse=args.sparse) for c in chunks]
+        empty = [r["chunk"] for r in rows if r["images"] < 2]
+        print(f"[global] split {len(rows)} chunks; "
+              f"{sum(r['images'] for r in rows)} image memberships, "
+              f"{sum(r['linked'] for r in rows)} new links")
+        if empty:
+            raise SystemExit(f"[global] {len(empty)} chunk(s) came out empty: {empty}")
 
     elif args.cmd == "train":
         from .train import train_all
