@@ -427,7 +427,57 @@ The control keeps the survey's 1.75 m spacing, so 12 positions reach 21 m, again
 high-quality bake's 20 × 1.1 = 22 m. Copying the 20 would have reached 35 m and quietly made
 this a two-variable experiment again.
 
-*Result to be recorded here when it lands.*
+**The control falsified the hypothesis, and the per-seam breakdown falsified the obvious
+replacement too.** Both bakes share a chunk grid, so they compare seam for seam:
+
+| seam | survey res (1620) | high res (2160) | Δ |
+|---|---|---|---|
+| x4_y0 / x5_y-1 | **3.85 m** | **0.51 m** | **3.34** |
+| x2_y-3 / x3_y-3 | 0.77 | 1.10 | −0.33 |
+| x4_y-3 / x5_y-3 | 0.14 | 0.17 | −0.03 |
+| x3_y-3 / x4_y-3 | 1.01 | 0.99 | 0.02 |
+| x5_y-2 / x5_y-3 | 0.11 | 0.13 | −0.02 |
+| x4_y-3 / x5_y-2 | 0.17 | 0.18 | −0.01 |
+| x5_y-1 / x5_y-2 | 0.54 | 0.54 | 0.00 |
+| x1_y-3 / x2_y-3 | 1.44 | 1.44 | 0.00 |
+
+Seven of eight seams are identical — five of them within 3 cm. Resolution did not improve seams
+systematically, and the 1.44 m worst seam is *the same seam at the same value* in both. Remove the
+one outlier and the two worlds are indistinguishable: worst 1.44 m, median 0.54 m, both.
+
+So the entire 1.44 → 3.85 m gap is one chunk pair. And `x5_y-1` agrees with `x5_y-2` at 0.54 m in
+*both* runs, which localises the fault to `x4_y0` alone.
+
+`x4_y0` sits 299 m from the capture centre against a 350 m ingest radius — the outermost chunk
+with anything like full coverage. The tighter `spacing_m` of the high-resolution config gave it
+**233 frames (169 core) where the control got 192 (128)**, a 24% difference concentrated exactly
+where coverage was already tapering. Every other chunk received near-identical frame counts.
+
+The correct reading is therefore neither "resolution buys seam quality" nor "geometry buys seam
+quality":
+
+> **A chunk's levelling is a draw, and coverage sets the odds.** Well-covered chunks land within
+> centimetres of each other across completely different configurations. A coverage-starved chunk
+> can land 3.85 m out or 0.51 m out, and which one you get is not determined by the settings that
+> were varied.
+
+This has three consequences for scale, and they are the reason this entry exists:
+
+1. **The decision the experiment was run to make is settled, and it went the cheap way.** Survey
+   resolution with 120 m cells reproduces the expensive bake's seam structure exactly, at 2.7 MB
+   per 1000 m² instead of 15.8. The 0.7 dB of §2.1 is what pixels buy, and it is now a separate,
+   optional purchase rather than the price of a driveable world.
+2. **Worst-case seam is not a property of a configuration.** It is an order statistic over draws.
+   Reporting "worst seam 1.44 m" for a 9-chunk bake says little about what 300 chunks will do —
+   tuning against a single small bake's worst case is tuning against noise.
+3. **At scale you cannot avoid bad draws; you must detect and repair them.** A neighbourhood is
+   hundreds of chunks and some fraction will be coverage-starved at a capture boundary. The useful
+   artefact is not a better config, it is §2.2's seam check pointing at `chunk_x4_y0` by name —
+   which it did, unprompted, with a number attached.
+
+A cheaper prediction also falls out, still to be tested: if coverage sets the odds, the fix for a
+boundary chunk is *more frames there*, not more pixels everywhere — a local `spacing_m`, or simply
+declining to publish chunks whose core-frame count falls below what neighbouring chunks receive.
 
 ### 2.5 Two checks that could not fail, in one afternoon
 
