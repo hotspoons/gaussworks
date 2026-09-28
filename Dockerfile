@@ -191,6 +191,16 @@ RUN test "$(ls /tmp/pycolmap-src/src/pycolmap/*.cc 2>/dev/null | wc -l)" -gt 0 \
     SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS};-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF;-DGENERATE_STUBS=OFF" \
     pip install --no-cache-dir /tmp/pycolmap-src/pycolmap && rm -rf /tmp/pycolmap-src
 
+# The requirements split in two on purpose. ppisp and fused-bilagrid are git+
+# packages whose setup.py imports torch to discover CUDA, and pip builds each
+# of those in an ISOLATED env where torch is not installed -- so the whole
+# build dies with ModuleNotFoundError after gsplat has already compiled for an
+# hour. --no-build-isolation lets them see the torch we installed above.
+#
+# Note we do NOT simply drop the git+ lines, which is what the pod's
+# build-stack script appears to do: the proven pod venv HAS ppisp,
+# fused_bilagrid and fused_ssim installed, so dropping them would ship a
+# different environment from the one every world so far was trained in.
 # scripts/gsplat-env.sh is the single source of truth for this compile's
 # environment -- "-Xcicc -O1" (cicc peaks 9-20 GB per job on the fused kernels
 # without it) and MAX_JOBS sized off free RAM at ~10 GB each. It already
@@ -219,7 +229,10 @@ RUN set -eux; \
     test -n "${GAUSSWORKS_ARCH}"; \
     pip install --no-build-isolation .; \
     grep -vE "^pycolmap" examples/requirements.txt > /tmp/req.txt; \
-    pip install -r /tmp/req.txt
+    grep -vE "git\+" /tmp/req.txt > /tmp/req-wheels.txt; \
+    (grep -E "git\+" /tmp/req.txt > /tmp/req-src.txt || true); \
+    pip install -r /tmp/req-wheels.txt; \
+    pip install --no-build-isolation -r /tmp/req-src.txt
 ENV GSPLAT_EXAMPLES=/opt/gsplat/examples
 
 COPY . /opt/splatpipe

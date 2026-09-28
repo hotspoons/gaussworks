@@ -39,9 +39,23 @@ def _cfg(path: str | None, stage: str) -> dict:
 def main():
     p = argparse.ArgumentParser(prog="splatpipe")
     p.add_argument("--config", help="stage-defaults yaml (see configs/)")
+
+    # --config is a GLOBAL flag, so `splatpipe run --config x` was an
+    # "unrecognized arguments" exit 2 -- a whole job dying on its first line
+    # because a flag was on the wrong side of the subcommand. Anyone generating
+    # this command line hits it, and the world editor did. Accepting it in
+    # either position costs one parent parser.
+    #
+    # SUPPRESS is what makes it safe: without it the subparser's default of
+    # None would overwrite a --config given BEFORE the subcommand, turning the
+    # working spelling into a silent no-config run.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=argparse.SUPPRESS,
+                        help="stage-defaults yaml (see configs/)")
+
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("ingest", help="video(s) -> geotagged pinhole frames")
+    s = sub.add_parser(parents=[common], name="ingest", help="video(s) -> geotagged pinhole frames")
     s.add_argument("videos", nargs="+", type=Path)
     s.add_argument("--out", required=True, type=Path)
     s.add_argument("--profile", help="camera profile name (default: auto-detect)")
@@ -63,13 +77,13 @@ def main():
                    help="proceed without GPS (no geo alignment, no locality "
                         "chunking, no distance-based spacing)")
 
-    s = sub.add_parser("mapillary", help="fetch 360 sequences w/ GPS from Mapillary")
+    s = sub.add_parser(parents=[common], name="mapillary", help="fetch 360 sequences w/ GPS from Mapillary")
     s.add_argument("--bbox", required=True, help="w,s,e,n")
     s.add_argument("--out", required=True, type=Path)
     s.add_argument("--max-images", type=int, default=2000)
     s.add_argument("--min-seq-len", type=int, default=50)
 
-    s = sub.add_parser("chunk", help="frames -> overlapping locality chunks")
+    s = sub.add_parser(parents=[common], name="chunk", help="frames -> overlapping locality chunks")
     s.add_argument("--frames", required=True, type=Path)
     s.add_argument("--cell-m", type=float, help="grid cell size, metres (0 = one chunk)")
     s.add_argument("--overlap-m", type=float, help="halo pulled in from neighbours")
@@ -78,11 +92,11 @@ def main():
                                     "grid. Default: the first frame's fix, which "
                                     "is usually the least converged one in the drive")
 
-    s = sub.add_parser("profiles", help="list camera profiles, or detect one for a file")
+    s = sub.add_parser(parents=[common], name="profiles", help="list camera profiles, or detect one for a file")
     s.add_argument("video", nargs="?", type=Path)
     s.add_argument("--plan", action="store_true", help="also show the view plan")
 
-    s = sub.add_parser("flatten", help=".360 -> equirectangular mp4 for any 360 player")
+    s = sub.add_parser(parents=[common], name="flatten", help=".360 -> equirectangular mp4 for any 360 player")
     s.add_argument("video", type=Path)
     s.add_argument("--out", type=Path)
     s.add_argument("--width", type=int, default=4096)
@@ -92,7 +106,7 @@ def main():
     s.add_argument("--hwaccel", help="e.g. cuda")
     s.add_argument("--profile")
 
-    s = sub.add_parser("mask", help="auto-mask the capture vehicle out of every frame")
+    s = sub.add_parser(parents=[common], name="mask", help="auto-mask the capture vehicle out of every frame")
     s.add_argument("--frames", required=True, type=Path)
     s.add_argument("--sample", type=int, default=60)
     s.add_argument("--search-from", type=float, default=0.35,
@@ -104,11 +118,11 @@ def main():
                         "side of the seam. Raw-lens profiles never need it -- "
                         "ingest writes exact per-lens coverage masks instead.")
 
-    s = sub.add_parser("status", help="queue state across chunks (pending/running/done/failed)")
+    s = sub.add_parser(parents=[common], name="status", help="queue state across chunks (pending/running/done/failed)")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--stage", default="all", choices=["all", "poses", "train"])
 
-    s = sub.add_parser("poses", help="per-chunk COLMAP/GLOMAP + ENU alignment")
+    s = sub.add_parser(parents=[common], name="poses", help="per-chunk COLMAP/GLOMAP + ENU alignment")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--matcher", choices=["spatial", "sequential", "exhaustive"])
     s.add_argument("--no-align", action="store_true")
@@ -130,7 +144,7 @@ def main():
                         "spatial+sequential, for multi-pass chunks whose GPS "
                         "priors cannot be trusted (default: config, else none)")
 
-    s = sub.add_parser("train", help="per-chunk gsplat training, fanned out over the work queue")
+    s = sub.add_parser(parents=[common], name="train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--steps", type=int, default=30000)
     s.add_argument("--only", nargs="*", help="chunk name substrings: run just these")
@@ -141,14 +155,14 @@ def main():
                                  "so experiments sit beside the baseline run")
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
 
-    s = sub.add_parser("verify", help="eyeball a new camera/format: EAC layout, GPS, views")
+    s = sub.add_parser(parents=[common], name="verify", help="eyeball a new camera/format: EAC layout, GPS, views")
     s.add_argument("video", type=Path)
     s.add_argument("--out", type=Path, default=Path("data/verify"))
     s.add_argument("--at", type=float, default=5.0, help="seconds into the clip")
     s.add_argument("--profile", help="camera profile name (default: auto-detect)")
     s.add_argument("--hwaccel", help="e.g. cuda")
 
-    s = sub.add_parser("eval", help="compare checkpoints on visible (unmasked) pixels")
+    s = sub.add_parser(parents=[common], name="eval", help="compare checkpoints on visible (unmasked) pixels")
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("ckpts", nargs="+", type=Path)
     s.add_argument("--test-every", type=int, default=8)
@@ -158,7 +172,7 @@ def main():
                         "their own widths the higher-resolution one is scored against a "
                         "harder target and the numbers are not comparable")
 
-    s = sub.add_parser("seams", help="do neighbouring chunks agree about the road's height?")
+    s = sub.add_parser(parents=[common], name="seams", help="do neighbouring chunks agree about the road's height?")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--within", type=Path,
                    help="another world's chunks dir: restrict to chunks inside its "
@@ -168,21 +182,27 @@ def main():
     s.add_argument("--fail-over", type=float, metavar="M",
                    help="exit non-zero if the worst seam exceeds M metres (for CI)")
 
-    s = sub.add_parser("merge", help="chunk splats -> one streamable world (tiles + world.json)")
+    s = sub.add_parser(parents=[common], name="merge", help="chunk splats -> one streamable world (tiles + world.json)")
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--out", required=True, type=Path)
     s.add_argument("--keep-floaters", action="store_true",
                    help="skip corridor pruning (keeps gaussians no camera observed)")
     s.add_argument("--single", action="store_true", help="also write one world.ply")
 
-    s = sub.add_parser("run", help="one capture end to end (leader/worker, for a JobSet)")
+    s = sub.add_parser(parents=[common], name="run", help="one capture end to end (leader/worker, for a JobSet)")
     s.add_argument("--capture", required=True, type=Path, help="dir holding capture.json and video/")
     s.add_argument("--out", required=True, type=Path, help="where world.json and tiles/ are published")
     s.add_argument("--role", choices=["leader", "worker"], default="leader")
     s.add_argument("--site", type=Path, help="the baked world, for levelling against its lidar")
     s.add_argument("--work", type=Path, help="scratch (default: <out>/.work)")
+    s.add_argument("--seam-fail-over", default="3.0", metavar="M",
+                   help="refuse to train if the worst seam between neighbouring "
+                        "chunks exceeds M metres (default 3.0; 'none' disables). "
+                        "Seams are measurable after poses and before training, so "
+                        "this rejects an undriveable world for the cost of poses "
+                        "rather than the cost of the whole bake")
 
-    s = sub.add_parser("lod", help="cheaper copies of a merged world's tiles (far / probe LOD)")
+    s = sub.add_parser(parents=[common], name="lod", help="cheaper copies of a merged world's tiles (far / probe LOD)")
     s.add_argument("--world", required=True, type=Path, help="merge output dir")
     s.add_argument("--keep", type=float, default=0.125,
                    help="fraction of gaussians to keep, ranked by opacity x footprint")
@@ -190,7 +210,7 @@ def main():
                    help="keep spherical harmonics (default: drop bands 1-3, ~73%% of the bytes)")
     s.add_argument("--name", default="far", help="LOD name; written to tiles_<name>/")
 
-    s = sub.add_parser("mesh", help="trained splat -> textured mesh (depth fusion)")
+    s = sub.add_parser(parents=[common], name="mesh", help="trained splat -> textured mesh (depth fusion)")
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("--ckpt", type=Path)
     s.add_argument("--out", type=Path)
@@ -205,7 +225,7 @@ def main():
                    help="drop depth pixels whose gradient exceeds this fraction "
                         "of depth (silhouette bleed); 0 disables")
 
-    s = sub.add_parser("drive", help="render a drive along the capture corridor")
+    s = sub.add_parser(parents=[common], name="drive", help="render a drive along the capture corridor")
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("--out", type=Path)
     s.add_argument("--ckpt", type=Path)
@@ -223,7 +243,7 @@ def main():
     s.add_argument("--all-passes", action="store_true",
                    help="render every pass, one video each (drive_passN.mp4)")
 
-    s = sub.add_parser("route", help="corridor -> one driveable point-to-point stage")
+    s = sub.add_parser(parents=[common], name="route", help="corridor -> one driveable point-to-point stage")
     s.add_argument("--world", required=True, type=Path)
     s.add_argument("--out", type=Path)
     s.add_argument("--join-m", type=float, default=60.0,
@@ -231,7 +251,7 @@ def main():
     s.add_argument("--dedupe-m", type=float, default=20.0,
                    help="how close counts as retracing the same road")
 
-    s = sub.add_parser("export", help="world corridor -> road/centerline for a sim or GIS")
+    s = sub.add_parser(parents=[common], name="export", help="world corridor -> road/centerline for a sim or GIS")
     s.add_argument("--world", required=True, type=Path, help="merge output dir")
     s.add_argument("--out", type=Path)
     s.add_argument("--width-m", type=float, default=6.0, help="road ribbon width")
@@ -240,7 +260,7 @@ def main():
     s.add_argument("--z-up", action="store_true", help="keep ENU Z-up (default Y-up)")
     s.add_argument("--route", type=Path, help="route.json: export one stage, not every pass")
 
-    s = sub.add_parser("smoke", help="end-to-end sanity check on the .360 sample")
+    s = sub.add_parser(parents=[common], name="smoke", help="end-to-end sanity check on the .360 sample")
     s.add_argument("--sample", type=Path, default=Path("data/samples/GS010513.360"))
     s.add_argument("--out", type=Path, default=Path("data/smoke"))
 
@@ -365,7 +385,10 @@ def main():
 
     elif args.cmd == "run":
         from .run import run
-        run(args.capture, args.out, args.role, args.config, site=args.site, work=args.work)
+        sfo = None if str(args.seam_fail_over).lower() in ("none", "off", "0") \
+            else float(args.seam_fail_over)
+        run(args.capture, args.out, args.role, args.config, site=args.site,
+            work=args.work, seam_fail_over=sfo)
 
     elif args.cmd == "lod":
         from .lod import build

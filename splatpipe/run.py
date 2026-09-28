@@ -77,6 +77,64 @@ def _wait_for_chunks(work: Path, timeout_s: float) -> Path:
     return chunks
 
 
+GATE_FILE = ".seam-gate.json"
+
+
+def _seam_gate(chunks: Path, fail_over: float | None) -> dict:
+    """Decide whether this world is worth training, and record the verdict.
+
+    Seam agreement reads corridor.json, which POSES produces -- so a world can
+    be judged driveable before a single GPU-hour goes into training. On the
+    arrowhead re-bake that is ~2 GPU-hours against ~11, which is the difference
+    between iterating on a neighbourhood and not.
+
+    The verdict is written for the WORKERS, not for us: they train too, and a
+    leader that merely exits would leave them grinding on a world it has
+    already rejected. Written on the skip path as well, so its absence always
+    means something went wrong rather than "gate disabled".
+    """
+    from .seams import measure
+
+    verdict: dict = {"fail_over": fail_over}
+    if fail_over is None:
+        verdict |= {"ok": True, "skipped": True}
+        print("[run] seam gate disabled (--seam-fail-over none)", flush=True)
+    else:
+        rows, n = measure(chunks)
+        if not rows:
+            # No overlapping pair means nothing was checked. Passing here would
+            # be the "check that cannot fail" that this gate exists to avoid.
+            verdict |= {"ok": False, "worst": None, "seams": 0, "chunks": n}
+            print(f"[run] seam gate: NOTHING MEASURED -- {n} chunks share no road. "
+                  f"Check overlap_m and the corridor radius.", flush=True)
+        else:
+            worst = max(r[3] for r in rows)
+            med = sorted(r[3] for r in rows)[len(rows) // 2]
+            ok = worst <= fail_over
+            verdict |= {"ok": ok, "worst": worst, "median": med,
+                        "seams": len(rows), "chunks": n,
+                        "offenders": sorted({c for a, b, _, m, _ in rows if m > fail_over
+                                             for c in (a, b)})}
+            print(f"[run] seam gate: {len(rows)} seams, median {med:.2f} m, "
+                  f"worst {worst:.2f} m against a {fail_over:.2f} m bar -- "
+                  f"{'PASS' if ok else 'FAIL'}", flush=True)
+            if not ok:
+                print(f"[run] chunks over the bar: {verdict['offenders']}", flush=True)
+    (chunks / GATE_FILE).write_text(json.dumps(verdict, indent=1))
+    return verdict
+
+
+def _wait_for_gate(chunks: Path, timeout_s: float) -> dict:
+    """A worker's view of the leader's verdict."""
+    t0 = time.time()
+    g = chunks / GATE_FILE
+    while not g.exists():
+        if time.time() - t0 > timeout_s:
+            raise SystemExit(f"[run] no {g} after {timeout_s:.0f}s -- did the leader fail?")
+        time.sleep(10)
+    return json.loads(g.read_text())
+
+
 def _wait_for_stage(chunks: Path, stage: str, timeout_s: float):
     """Block until every chunk has a .done for this stage."""
     t0 = time.time()
@@ -96,7 +154,8 @@ def _wait_for_stage(chunks: Path, stage: str, timeout_s: float):
 
 def run(capture: Path, out: Path, role: str, config: str | None,
         site: Path | None = None, work: Path | None = None,
-        timeout_s: float = 48 * 3600) -> Path:
+        timeout_s: float = 48 * 3600,
+        seam_fail_over: float | None = 3.0) -> Path:
     from .chunks import make_chunks
     from .cli import _cfg, _near, _origin
     from .mask import build as build_masks
@@ -117,6 +176,10 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                   spatial_radius=pcfg.get("spatial_radius", 4),
                   loop_closure=pcfg.get("loop_closure", "none"))
         _wait_for_stage(chunks, "poses", timeout_s)
+        if not _wait_for_gate(chunks, timeout_s)["ok"]:
+            print("[run] worker: leader rejected this world at the seam gate, "
+                  "not training", flush=True)
+            return out
         train_all(chunks)
         print("[run] worker done", flush=True)
         return out
@@ -154,6 +217,15 @@ def run(capture: Path, out: Path, role: str, config: str | None,
               spatial_radius=pcfg.get("spatial_radius", 4),
               loop_closure=pcfg.get("loop_closure", "none"))
     _wait_for_stage(chunks, "poses", timeout_s)
+    gate = _seam_gate(chunks, seam_fail_over)
+    if not gate["ok"]:
+        # Non-zero, with the number on stdout: a scheduler's run object then
+        # fails visibly instead of publishing a world nobody trusts.
+        worst = gate.get("worst")
+        raise SystemExit(f"[run] seam gate FAILED: worst seam "
+                         f"{'none measured' if worst is None else format(worst, '.2f') + ' m'} "
+                         f"against a {seam_fail_over:.2f} m bar. Not training. "
+                         f"Verdict in {chunks / GATE_FILE}.")
     train_all(chunks)
     _wait_for_stage(chunks, "train", timeout_s)
 
