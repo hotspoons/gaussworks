@@ -566,6 +566,86 @@ pattern worth extracting: in a regime where the standard metrics were validated 
 of the last four real improvements to this pipeline came from noticing that a number did not
 mean what it appeared to mean.
 
+---
+
+## Entry 3 — 2026-09-28: we partition before we solve, and everyone else solves before they partition
+
+Open problem 10 asked what makes a *region* fail. The answer appears to be architectural, and it
+is visible by comparing our pipeline's ORDER against the reference implementations rather than by
+any further measurement of our own.
+
+**What we do.** Cut the capture into chunks, then run COLMAP/GLOMAP independently inside each
+chunk, then align each chunk to its own GPS priors with `model_aligner`. Every chunk arrives at
+its datum alone.
+
+**What the reference large-scale 3DGS implementation does.** Hierarchical 3DGS (Kerbl et al.,
+SIGGRAPH 2024) — the system built for exactly our regime, kilometre-scale street capture — runs
+*global* SfM over the whole capture first, aligns and scales that single reconstruction to
+metric, and only then cuts it into chunks. Each chunk inherits its poses from the global
+reconstruction; per-chunk bundle adjustment then refines locally. Their partitioning is a
+**training** optimisation applied to an already-consistent world.
+
+That is the whole difference. In their pipeline the chunks cannot disagree about the height of a
+shared road, because the height was decided once, before the cut. In ours, agreement is something
+we hope for and then measure.
+
+### 3.1 It explains every observation we could not explain
+
+Independent per-chunk datums predict exactly what we see, and the alternatives do not:
+
+- **Failure rate is ~44% at 200 m and ~43% at 120 m.** If each chunk's datum is an independent
+  draw, cell size changes how many draws there are and not the odds of each — which is precisely
+  what §2.4a measured and could not account for.
+- **Frame count does not predict failure** (§2.4a), and in the survey the relationship inverts.
+  Under this model it should not predict anything: the error is in how the datum was chosen, not
+  in how much data supported it.
+- **Failures come in contiguous regions**, four chunks at 18–67 m, not a scatter. Neighbouring
+  chunks share a stretch of GPS. Under continuous canopy that stretch is biased the same way for
+  all of them, so they drift *together*, and the visible seam is at the boundary with chunks
+  outside the bad stretch. A per-chunk lottery would scatter; a shared bad prior clusters.
+- **Loop closure inside a chunk made things worse** (§1.5) and smaller cells only moved the
+  median. Both are interventions *within* a chunk, and the defect is *between* chunks.
+
+It also explains why no configuration change has flattened the tail, and predicts none will. We
+have been tuning the partition while the disagreement is created by the ordering.
+
+### 3.2 Two ways out, and they cost very differently
+
+**A. Solve globally, then cut.** The Inria ordering. Our survey is 5,075 frames, which is
+comfortably inside the range these systems target, and COLMAP ships `hierarchical_mapper` for
+scenes where incremental SfM is too slow — it partitions into *overlapping* sub-models,
+reconstructs them independently and merges them, which is the same idea one level down. This is
+the correct fix and it is a pipeline restructure, not a knob.
+
+**B. Stop treating chunks as independent, without re-solving.** Our chunks already overlap by
+40 m, which means neighbouring chunks contain the *same frames*. COLMAP merges sub-models
+precisely when "those sub-models have common registered images", and recommends a global bundle
+adjustment afterwards to improve the alignment. So the constraint we need is already in the data
+and is currently thrown away: estimate the relative transform between each chunk pair from their
+shared registrations, optimise a pose graph over chunks, and demote GPS from per-chunk datum to a
+weak global prior.
+
+**An honest caveat on B.** This is the levelling network of §1.4 and §1.6a, which failed. But it
+failed for a reason that B avoids: those attempts levelled against *GPS altitude* and then
+against a *DTM* — two noisy external references measuring different things. Shared camera
+registrations are an internal constraint of a completely different quality: two chunks that
+contain the same frame must place that frame identically, and there is no datum to argue about.
+Whether that survives the corridor's conditioning is untested, and the corridor literature is
+explicit that in corridor-like environments without good loops, drift in some directions is
+especially hard to correct — which is §1.6a from the SLAM side.
+
+### 3.3 What this says about the last two days
+
+The measurement work of Entry 2 was not wasted — `seams` is what made the failure legible, and
+the gate is what stops an undriveable world shipping. But the *experiments* it powered were all
+searches over configuration, and the answer was never in the configuration. Three bakes were
+spent asking which cell size and which resolution, when the informative comparison was between
+our pipeline's shape and a published one's, and cost a search rather than a GPU.
+
+Worth generalising: when a defect survives every setting you vary, stop varying settings. The
+question "what is structurally different about how we do this?" is cheap, and we reached for it
+third.
+
 ## Open problems
 
 Ordered by how much they will hurt at network scale.
@@ -600,7 +680,9 @@ Ordered by how much they will hurt at network scale.
 9. **Seam count versus seam size.** Measured in §2.4a and it is not a clean trade: smaller cells
    improved the median by a third AND made the worst seam five times worse. Median and tail move
    independently, so a single cell size cannot be tuned against both.
-10. **What makes a REGION fail?** The 120 m re-bake's damage is four contiguous chunks at 18–67 m,
+10. **What makes a REGION fail?** *Probable answer in Entry 3: chunks are solved and levelled
+   independently, so each picks its own datum, and neighbours sharing a bad GPS stretch drift
+   together. Untested until the ordering is changed.* The 120 m re-bake's damage is four contiguous chunks at 18–67 m,
    not a scatter. Frame count does not predict it (§2.4a) and the reconstructions did not
    visibly fracture. Until this is understood, no config change should be claimed to fix seams —
    this is now the central open problem, and everything in §2.4 is downstream of it.
