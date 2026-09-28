@@ -463,10 +463,10 @@ quality":
 
 This has three consequences for scale, and they are the reason this entry exists:
 
-1. **The decision the experiment was run to make is settled, and it went the cheap way.** Survey
-   resolution with 120 m cells reproduces the expensive bake's seam structure exactly, at 2.7 MB
-   per 1000 m² instead of 15.8. The 0.7 dB of §2.1 is what pixels buy, and it is now a separate,
-   optional purchase rather than the price of a driveable world.
+1. **The decision the experiment was run to make looked settled, and §2.4a shows it was not.**
+   Survey resolution with 120 m cells reproduces the expensive bake's seam structure on this
+   street at 2.7 MB per 1000 m² instead of 15.8, and the resolution finding holds. The claim
+   that this settled the neighbourhood did not survive baking the neighbourhood.
 2. **Worst-case seam is not a property of a configuration.** It is an order statistic over draws.
    Reporting "worst seam 1.44 m" for a 9-chunk bake says little about what 300 chunks will do —
    tuning against a single small bake's worst case is tuning against noise.
@@ -474,6 +474,46 @@ This has three consequences for scale, and they are the reason this entry exists
    hundreds of chunks and some fraction will be coverage-starved at a capture boundary. The useful
    artefact is not a better config, it is §2.2's seam check pointing at `chunk_x4_y0` by name —
    which it did, unprompted, with a number attached.
+
+### 2.4a The neighbourhood refuted most of 2.4
+
+The 120 m re-bake of the whole capture (49 chunks against the survey's 29) landed, and it does
+not support the conclusion above. Same ground, same resolution, cell size the only change:
+
+| | chunks | seams | median-of-medians | worst | chunks >3 m |
+|---|---|---|---|---|---|
+| survey, 200 m | 29 | 32 | 1.18 m | 13.68 m | 12 of 27 (44%) |
+| re-bake, 120 m | 49 | 62 | **0.76 m** | **67.33 m** | 18 of 47 (38%) |
+
+Smaller cells improved the TYPICAL seam by a third and left the failure *rate* slightly better.
+They also produced a catastrophe the small bake gave no hint of: four contiguous chunks in the
+west (`x-4_y0`, `x-4_y-1`, `x-5_y-1`, `x-5_y0`) mutually disagreeing by 18–67 m.
+
+Two corrections follow, and the second is the one that matters.
+
+**"Coverage sets the odds" is not supported at this sample size.** That claim came from a single
+chunk in a nine-chunk bake. Across 47 chunks, core frame count does not separate the failures:
+
+    chunks with <60 core frames    40% blew the 3 m budget
+    chunks with >=60               38%
+
+In the survey the relationship is actually *inverted* — the chunks that failed had a median of
+192 core frames against 127 for the ones that passed. Whatever decides a bad draw, it is not how
+much data the chunk got. §2.4's mechanism should be read as an untested hypothesis that one
+chunk was consistent with, and the generalisation was mine, not the data's.
+
+**Generalising a tail statistic from nine chunks to fifty was the actual error.** §2.4 itself
+says worst-case seam is an order statistic rather than a property of a configuration — and then
+the recommendation was made on a nine-chunk bake's worst case anyway. The median generalised
+fine. The tail did not, and the tail is what makes a world undriveable. A small bake can measure
+a central tendency; it cannot measure a rare failure, because it does not contain enough draws
+to have seen one.
+
+The practical upshot is unchanged in one respect and reversed in another: 120 m cells are still
+the better setting for the typical seam, and the re-bake is still **not** publishable — the 3 m
+gate rejects it, correctly, and it would have shipped a 67 m step into the world otherwise. The
+open question is no longer "which config" but "what makes a region fail", which §2.4's framing
+was actively unhelpful for.
 
 A cheaper prediction also falls out, still to be tested: if coverage sets the odds, the fix for a
 boundary chunk is *more frames there*, not more pixels everywhere — a local `spacing_m`, or simply
@@ -552,9 +592,16 @@ Ordered by how much they will hurt at network scale.
    error — the reported misalignment of ~2 m to the east is invisible to it. The general problem:
    what is the smallest set of free invariants that bounds every way a corridor world can be
    wrong in a way a driver notices?
-9. **Seam count versus seam size.** Smaller cells appear to tighten each seam while creating more
-   of them (§2.4). Those trade against each other and we have no model of the exchange rate —
-   at some cell size the accumulated many-small-steps must overtake the few-large-steps regime.
+9. **Seam count versus seam size.** Measured in §2.4a and it is not a clean trade: smaller cells
+   improved the median by a third AND made the worst seam five times worse. Median and tail move
+   independently, so a single cell size cannot be tuned against both.
+10. **What makes a REGION fail?** The 120 m re-bake's damage is four contiguous chunks at 18–67 m,
+   not a scatter. Frame count does not predict it (§2.4a) and the reconstructions did not
+   visibly fracture. Until this is understood, no config change should be claimed to fix seams —
+   this is now the central open problem, and everything in §2.4 is downstream of it.
+11. **How many chunks must a trial bake contain to measure a tail?** Nine was enough for the
+   median and badly insufficient for the worst case. Trials are how we iterate; not knowing the
+   size at which their rare failures become measurable makes every trial result suspect.
 
 ## Anti-patterns, collected
 
@@ -573,6 +620,8 @@ Short list, all paid for:
 - comparing **PSNR across training resolutions** (§2.1) — though the correction is only 0.13 dB
 - optimising the field's **standard metric** after changing the regime that validated it (§2.2)
 - comparing worlds of **different extent** without restricting to shared ground (§2.3)
+- generalising a **tail statistic** (worst seam) from a trial too small to contain a rare
+  failure, while writing in the same entry that it is an order statistic (§2.4a)
 - changing **resolution and geometry in one config** and reading the result as either (§2.4)
 - filtering a log for the **success string**, so a crash and a clean run look identical (§2.5)
 - a gate whose **failure path exits zero** — worse than no gate, because it manufactures
