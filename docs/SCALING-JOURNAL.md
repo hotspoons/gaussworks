@@ -483,10 +483,11 @@ not support the conclusion above. Same ground, same resolution, cell size the on
 | | chunks | seams | median-of-medians | worst | chunks >3 m |
 |---|---|---|---|---|---|
 | survey, 200 m | 29 | 32 | 1.18 m | 13.68 m | 12 of 27 (44%) |
-| re-bake, 120 m | 49 | 62 | **0.76 m** | **67.33 m** | 18 of 47 (38%) |
+| re-bake, 120 m | 49 | 62 | **0.76 m** | **67.33 m** | 20 of 47 (43%) |
 
-Smaller cells improved the TYPICAL seam by a third and left the failure *rate* slightly better.
-They also produced a catastrophe the small bake gave no hint of: four contiguous chunks in the
+Smaller cells improved the TYPICAL seam by a third and left the failure *rate* unchanged (43%
+against 44%; an earlier draft said 38%, measured before the last chunks had finished writing
+their corridors — the queue was drained but the files were not). They also produced a catastrophe the small bake gave no hint of: four contiguous chunks in the
 west (`x-4_y0`, `x-4_y-1`, `x-5_y-1`, `x-5_y0`) mutually disagreeing by 18–67 m.
 
 Two corrections follow, and the second is the one that matters.
@@ -496,6 +497,10 @@ chunk in a nine-chunk bake. Across 47 chunks, core frame count does not separate
 
     chunks with <60 core frames    40% blew the 3 m budget
     chunks with >=60               38%
+
+(Those two proportions were computed on the same premature read as the 38% above. The settled
+figure is 20 of 47; the *separation* between thin and fat chunks is what matters here and it is
+absent either way, but the exact percentages should be re-derived before anyone quotes them.)
 
 In the survey the relationship is actually *inverted* — the chunks that failed had a median of
 192 core frames against 127 for the ones that passed. Whatever decides a bad draw, it is not how
