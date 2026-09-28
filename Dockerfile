@@ -91,8 +91,18 @@ RUN git clone --depth 1 -b ${GLOMAP_VER} https://github.com/colmap/glomap /tmp/g
     && cmake --build /tmp/glomap/build --target install \
     && rm -rf /tmp/glomap
 
-# --- runtime ------------------------------------------------------------------
-FROM ${BASE_IMAGE}
+# --- compiled ------------------------------------------------------------------
+# Everything expensive, in a target of its own: SfM binaries, torch, pycolmap and
+# gsplat's CUDA kernels. ~75 minutes, and it depends on NOTHING in this repo except
+# scripts/gsplat-env.sh.
+#
+# Why it is a separate target and not just earlier layers. `cache-to` exports only
+# when the build SUCCEEDS, so every failure in the cheap tail below -- and there have
+# been many -- threw away the whole compile and rebuilt it on the next push. Building
+# this target first gives it a cache export that lands regardless of what happens
+# afterwards, exactly as sfm-builder already does. Same layers either way; the
+# difference is whether an unrelated typo costs 75 minutes.
+FROM ${BASE_IMAGE} AS compiled
 ARG GSPLAT_REF=main
 ARG CUDA_ARCHS=80;89;90;120
 
@@ -235,6 +245,11 @@ RUN set -eux; \
     pip install --no-build-isolation -r /tmp/req-src.txt
 ENV GSPLAT_EXAMPLES=/opt/gsplat/examples
 
+# --- runtime ------------------------------------------------------------------
+# From here down is seconds, and it is the only part that sees repo source. Keeping
+# `COPY .` out of the compiled target is what stops an edit to any file in the repo
+# invalidating the CUDA builds.
+FROM compiled
 COPY . /opt/splatpipe
 RUN pip install /opt/splatpipe
 

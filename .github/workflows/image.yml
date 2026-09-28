@@ -106,6 +106,26 @@ jobs:
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-sfm-arm64,mode=max,image-manifest=true,oci-mediatypes=true
           provenance: false
 
+      # The second and larger half of the same argument: torch, pycolmap and
+      # gsplat's CUDA kernels are ~75 minutes and depend on nothing in this repo
+      # but scripts/gsplat-env.sh. Built as its own target, their cache export
+      # lands even when the cheap tail below fails -- which is what has actually
+      # been happening, repeatedly, to a packaging typo.
+      - name: Build the compiled stage (torch + pycolmap + gsplat)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          target: compiled
+          push: false
+          build-args: |
+            CUDA_ARCHS=${{ inputs.cuda_archs || '90' }}
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE }}:buildcache-compiled-arm64
+            type=registry,ref=${{ env.IMAGE }}:buildcache-sfm-arm64
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-compiled-arm64,mode=max,image-manifest=true,oci-mediatypes=true
+          provenance: false
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -120,6 +140,7 @@ jobs:
           # the importer logs "not found" -- expected once, not fatal.
           cache-from: |
             type=registry,ref=${{ env.IMAGE }}:buildcache-arm64
+            type=registry,ref=${{ env.IMAGE }}:buildcache-compiled-arm64
             type=registry,ref=${{ env.IMAGE }}:buildcache-sfm-arm64
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-arm64,mode=max,image-manifest=true,oci-mediatypes=true
           provenance: false
