@@ -1,0 +1,121 @@
+# Arrowhead Farms, re-baked at the cell size the gosheff control measured.
+#
+# This is configs/arrowhead.yaml with ONE value changed: cell_m 200 -> 120.
+# Resolution stays exactly where the survey had it, on evidence rather than
+# taste. Measured over the same ground (docs/SCALING-JOURNAL.md 2.4):
+#
+#   survey resolution + 120 m cells   worst seam 1.44 m *
+#   high resolution   + 120 m cells   worst seam 1.44 m
+#
+#   * excluding chunk_x4_y0, whose 3.85 m is a coverage-starved chunk at the
+#     edge of that capture's ingest radius, not a resolution effect -- seven of
+#     the eight seams matched to within 3 cm, and the worst seam was the SAME
+#     seam at the SAME value in both bakes.
+#
+# So the 2160 px bake bought +0.7 dB of PSNR for 5.9x the bytes per square
+# metre, and bought nothing at the seams. At neighbourhood scale that is the
+# difference between a world we can ship and one we cannot.
+#
+# What to watch when this lands: `splatpipe seams --chunks <these chunks>`.
+# Smaller cells mean MORE seams, each expected to be tighter, and we have no
+# model of that exchange rate (journal, open problem 9). If the median holds
+# near 0.5 m and the count roughly doubles, the trade is good.
+campaign:
+  name: arrowhead-c120
+  anchor: "Arrowhead Farms, Crownsville MD (38.98138, -76.69057)"
+  # Road names taken from the baked site's OSM layer
+  # (tools/corridor/data/sites/arrowhead-farms/osm.geojson), not from memory.
+  roads:
+    - "Patuxent River Road"
+    - "Arrowhead Farms Road"
+    - "Arrowhead Farms Lane"
+    - "Patuxent Preserve Lane"
+    - "Patuxent Overlook"
+    - "Home Farm Court"
+    - "Halls Grove Road"
+    - "Gosheff Lane"
+  # Measured from the container headers, not the shot list: 448.4 + 448.4 +
+  # 344.8 s = 1241.6 s (20.7 min) of driving at 204 Mbit/s, two 5952x1920 EAC
+  # tracks per file. GS010001.360 is 4096x1344 -- a MAX 1 geometry, 5 s long --
+  # and GS010003.360 is 1.3 s. Neither is part of this drive; ingest the three
+  # chapters of 0002 only.
+  # capture protocol: as md-backroads -- roof rig on the Rivian, both
+  # directions where possible, stabilization OFF.
+
+ingest:
+  # Unchanged from md-backroads. The fov/pitch pair is NOT a free parameter:
+  # widen it and the planned views start crossing the lens seam, which puts
+  # stitched ghosts into the reconstruction that no later stage removes
+  # (docs/SEAM.md). px_per_deg 18 undersamples the ~21 px/deg source slightly,
+  # which is the survey-grade tradeoff; configs/hq.yaml is the other end.
+  fov: 90
+  px_per_deg: 18
+  pitch: [-10]
+  extract_fps: 6
+  spacing_m: 1.75
+  jpeg_quality: 95
+
+chunk:
+  # Pinned to the arrowhead-farms corridor site's anchor
+  # (tools/corridor/data/sites/arrowhead-farms/web/manifest.json, frame.anchor),
+  # which arrowhead-farms-network shares. Two reasons, and the second is the
+  # one that matters:
+  #   1. the default origin is the first frame's fix, and this drive's first
+  #      fix is its worst -- 45 s of cold start at DOP 36 with fix=0 before the
+  #      receiver converges (it ends the drive at DOP 1.4);
+  #   2. sharing the anchor makes this capture's ENU frame *identical* to the
+  #      baked world's, so composing the two is an identity rather than a
+  #      round trip through ECEF that has to be trusted.
+  origin: {lat: 38.98138, lon: -76.69057}
+  # 200 m is sized for open back roads. A subdivision puts far more geometry
+  # and far more road per unit area into a cell, so this is the number most
+  # likely to want changing -- but it is a measurement, not a guess: `chunk`
+  # prints frames per cell, and the figure to aim at is the ~1-4k images per
+  # chunk that poses/train have been exercised on. Re-run `chunk` with
+  # --cell-m to compare; it is cheap next to poses.
+  cell_m: 120
+  overlap_m: 40
+  min_frames: 20
+
+corridor:
+  # 25 m off the driven line still counts as observed. On these streets that
+  # reaches the house fronts and the near half of the front yards, which is
+  # what a driver sees; beyond it is somebody's back garden, reconstructed
+  # from nothing and best pruned.
+  radius_m: 25
+  height_margin_m: 8
+  min_spacing_m: 5
+  gap_m: 30
+  gap_s: 30
+
+poses:
+  matcher: spatial
+  align: true
+  # Canopy is the known risk here (docs/TRAILVIEW.md makes the same point for
+  # trails): continuous tree cover degrades the GPS priors that spatial
+  # matching reaches with, and a loop of short streets driven twice is exactly
+  # the case where a missed cross-pass pair splits one reconstruction in two.
+  # Left at the defaults until the ingest GPS verdict is in -- if the track
+  # wanders, raise spatial_radius and/or set loop_closure: vocab.
+  # MEASURED, not guessed. spatial_radius is a reach in CAPTURE POSITIONS, and
+  # at this capture's 2.35 m spacing 4 positions is only ~9 m. GPS error under
+  # the canopy here reaches 15-19 m (per-chunk median DOP up to 19), so on the
+  # return pass the prior pointed at the WRONG STRETCH of road: the two passes
+  # never matched each other and the global mapper floated them apart
+  # vertically. A driver sees that as the world twisting and then flattening.
+  #
+  # 12 positions is ~28 m of reach, which covers the error. Measured on
+  # chunk_x0_y-2, the worst tile in the world:
+  #
+  #                     overlap pairs   median dz   max dz
+  #   spatial_radius 4         56         7.75 m    17.03 m
+  #   spatial_radius 12       769         1.41 m     1.79 m
+  #
+  # It costs matching time -- 432 neighbour pairs against 96, so roughly 4.5x
+  # -- which is the right trade against a world that cannot be driven.
+  spatial_radius: 12
+  # Still none, and now for a measured reason rather than caution: retrieval
+  # matching made this capture WORSE (see poses.py). A subdivision is built
+  # from a handful of house plans, so it matches different houses of the same
+  # design. Widening the SPATIAL radius stays local; loop closure does not.
+  loop_closure: none
