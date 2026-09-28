@@ -149,7 +149,10 @@ def main():
     s.add_argument("--frames", required=True, type=Path)
     s.add_argument("--matcher", default="spatial")
     s.add_argument("--spatial-radius", type=int)
-    s.add_argument("--mapper", default="auto")
+    s.add_argument("--mapper", default="auto",
+                   choices=["auto", "glomap", "colmap", "hierarchical"],
+                   help="hierarchical = COLMAP's divide-and-conquer over ONE "
+                        "database, for captures too large to solve monolithically")
     s.add_argument("--loop-closure", default=None)
     s.add_argument("--origin", help="lat,lon of the project ENU frame; defaults to "
                                     "the chunk config's origin so the global model "

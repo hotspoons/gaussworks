@@ -450,6 +450,30 @@ def _map_and_align(chunk: Path, db: Path, sparse: Path, align: bool,
         # 1 pose plus 6 fixed offsets. See docs/HANDOFF.md.
         _run(["glomap", "mapper", "--database_path", str(db),
               "--image_path", str(chunk / "images"), "--output_path", str(raw)])
+    elif mapper == "hierarchical":
+        # COLMAP's own divide-and-conquer: it splits the scene into OVERLAPPING
+        # sub-models by image connectivity, reconstructs each, and merges them.
+        # Note what is different from what this pipeline used to do -- the
+        # partition is over one shared database and the merge is part of the
+        # solve, so the output is a SINGLE reconstruction with one datum. Our
+        # old per-chunk solving partitioned the images and never merged, which
+        # is why the chunks disagreed (docs/SCALING-JOURNAL.md, entry 3).
+        #
+        # This is the fallback for captures too large for a monolithic global
+        # solve. COLMAP's own docs call it "usually less robust than the other
+        # two pipelines", so it is a scale concession, not a default.
+        hier = ["colmap", "hierarchical_mapper",
+                "--database_path", str(db),
+                "--image_path", str(chunk / "images"),
+                "--output_path", str(raw),
+                "--leaf_max_num_images", os.environ.get("HIER_LEAF", "500"),
+                "--image_overlap", os.environ.get("HIER_OVERLAP", "50")]
+        if (chunk / "cameras.json").exists():
+            # same reasoning as the incremental branch: our pinholes are exact
+            hier += ["--Mapper.ba_refine_focal_length", "0",
+                     "--Mapper.ba_refine_principal_point", "0",
+                     "--Mapper.ba_refine_extra_params", "0"]
+        _run(hier)
     else:
         print("[poses] using COLMAP's incremental mapper: CPU-only and much "
               "slower on sequences this size (measured 4h53m on 3,870 images "
