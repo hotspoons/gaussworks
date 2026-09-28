@@ -142,7 +142,14 @@ ENV PATH=/opt/sfm/bin:${PATH}
 
 # gsplat from source (kernels for our arch list) + its examples, which provide
 # the reference trainer that splatpipe train shells out to per chunk.
-ENV TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;12.0+PTX"
+# A DEFAULT for runtime only. The gsplat compile below does NOT use it: it
+# derives the list from CUDA_ARCHS, because this env and that build arg being
+# allowed to disagree is what cost build #8. The workflow passes CUDA_ARCHS=90
+# and its own comment says every extra architecture is expensive -- and then
+# gsplat compiled all four of these anyway, ~4x the nvcc work and peak memory,
+# and the runner OOM-killed it (exit 137) at hour three.
+ARG TORCH_ARCH_LIST="8.0;8.9;9.0;12.0+PTX"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_ARCH_LIST}
 # Python and torch EXPLICITLY. The old base carried them; this one does not, and
 # inheriting an interpreter is how a build starts depending on something nobody
 # declared. python3-dev is not optional: pycolmap is compiled below and CMake's
@@ -184,11 +191,35 @@ RUN test "$(ls /tmp/pycolmap-src/src/pycolmap/*.cc 2>/dev/null | wc -l)" -gt 0 \
     SKBUILD_CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS};-DGUI_ENABLED=OFF;-DTESTS_ENABLED=OFF;-DGENERATE_STUBS=OFF" \
     pip install --no-cache-dir /tmp/pycolmap-src/pycolmap && rm -rf /tmp/pycolmap-src
 
-RUN git clone --recursive https://github.com/nerfstudio-project/gsplat /opt/gsplat \
-    && cd /opt/gsplat && git checkout ${GSPLAT_REF} \
-    && pip install --no-build-isolation . \
-    && grep -vE "^pycolmap" examples/requirements.txt > /tmp/req.txt \
-    && pip install -r /tmp/req.txt
+# scripts/gsplat-env.sh is the single source of truth for this compile's
+# environment -- "-Xcicc -O1" (cicc peaks 9-20 GB per job on the fused kernels
+# without it) and MAX_JOBS sized off free RAM at ~10 GB each. It already
+# existed, written after the same OOM killed the pod build three times; this
+# RUN simply was not using it, and paid the same price a fourth time.
+#
+# GAUSSWORKS_ARCH is DERIVED from CUDA_ARCHS (90 -> 9.0, 120 -> 12.0) rather
+# than read from TORCH_CUDA_ARCH_LIST, so the expensive step cannot compile for
+# architectures this image was not built for. The ceiling is belt and braces:
+# a runner reporting plenty of free RAM still only has nproc cores, and a build
+# that has already spent three hours should not gamble the last step.
+COPY scripts/gsplat-env.sh /tmp/gsplat-env.sh
+RUN set -eux; \
+    git clone --recursive https://github.com/nerfstudio-project/gsplat /opt/gsplat; \
+    cd /opt/gsplat; \
+    git checkout ${GSPLAT_REF}; \
+    GAUSSWORKS_ARCH="$(printf '%s' "${CUDA_ARCHS}" | tr ';' '\n' \
+        | sed -E 's/^([0-9]+)([0-9])$/\1.\2/' | paste -sd';')"; \
+    export GAUSSWORKS_ARCH; \
+    . /tmp/gsplat-env.sh; \
+    cores="$(nproc)"; \
+    if [ "${MAX_JOBS}" -gt "${cores}" ]; then MAX_JOBS="${cores}"; fi; \
+    if [ "${MAX_JOBS}" -gt 4 ]; then MAX_JOBS=4; fi; \
+    export MAX_JOBS; \
+    echo "[image] gsplat for ${GAUSSWORKS_ARCH}, MAX_JOBS=${MAX_JOBS}, flags=${NVCC_APPEND_FLAGS}"; \
+    test -n "${GAUSSWORKS_ARCH}"; \
+    pip install --no-build-isolation .; \
+    grep -vE "^pycolmap" examples/requirements.txt > /tmp/req.txt; \
+    pip install -r /tmp/req.txt
 ENV GSPLAT_EXAMPLES=/opt/gsplat/examples
 
 COPY . /opt/splatpipe
