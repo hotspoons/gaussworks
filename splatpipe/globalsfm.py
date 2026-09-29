@@ -81,6 +81,25 @@ def solve_global(frames_dir: Path, origin: tuple[float, float], **kw) -> Path:
     model = frames_dir / GLOBAL_SPARSE
     if not model.exists():
         raise SystemExit(f"[global] solver produced no {model}")
+
+    # The POINT of a global solve is that one model covers the capture. If it
+    # does not, every downstream stage still "works" -- the split writes empty
+    # chunks, training skips them, merge produces a world with holes, and the
+    # seam check reads fine because the chunks it can still compare are the ones
+    # that survived. Refuse here, where it is one line, rather than let that
+    # play out over a day.
+    import pycolmap                              # noqa: PLC0415
+    n_ref = len((frames_dir / "geo_enu.txt").read_text().splitlines())
+    n_reg = pycolmap.Reconstruction(str(model)).num_reg_images()
+    frac = n_reg / n_ref if n_ref else 0.0
+    print(f"[global] {n_reg:,} of {n_ref:,} images registered ({frac:.0%})", flush=True)
+    if frac < float(os.environ.get("GLOBAL_MIN_COVERAGE", "0.85")):
+        raise SystemExit(
+            f"[global] only {frac:.0%} of the capture is in the global model. "
+            f"A partial solve is worse than none: it publishes a world with "
+            f"holes and nothing downstream complains. Check the mapper's model "
+            f"count above -- if it fragmented, the leaves did not merge, and a "
+            f"different mapper (or more matching) is the fix, not a lower bar.")
     return model
 
 

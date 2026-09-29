@@ -54,11 +54,32 @@ def list_chunks(chunks_dir: Path) -> list[Path]:
 
 
 def _largest_model(models_dir: Path) -> Path:
+    """The biggest reconstruction, and a LOUD account of what that discards.
+
+    Taking the largest is right for a chunk, where the extras are small spurious
+    fragments. Applied to a whole capture it is catastrophic and silent: the
+    first full-neighbourhood run produced 61 models, this returned the largest,
+    and the pipeline carried on with 3,210 of 30,786 images -- 10% of the drive
+    -- writing 34 empty chunks and a world with holes. Nothing failed. The cost
+    of that silence was a day.
+    """
     models = [p for p in models_dir.iterdir() if p.is_dir()]
     if not models:
         raise RuntimeError(f"no model produced under {models_dir}")
-    return max(models, key=lambda p: (p / "images.bin").stat().st_size
-               if (p / "images.bin").exists() else 0)
+    size = lambda p: ((p / "images.bin").stat().st_size
+                      if (p / "images.bin").exists() else 0)
+    best = max(models, key=size)
+    if len(models) > 1:
+        total = sum(size(m) for m in models)
+        kept = size(best) / total if total else 0.0
+        print(f"[poses] {len(models)} models under {models_dir}; keeping "
+              f"{best.name}, which is {kept:.0%} of the reconstructed data. "
+              f"The other {len(models) - 1} are DISCARDED.", flush=True)
+        if kept < 0.9:
+            print(f"[poses] that is {1 - kept:.0%} of the solve thrown away -- "
+                  f"the capture did not reconstruct as one connected model.",
+                  flush=True)
+    return best
 
 
 def _rig_size(chunk: Path) -> tuple[int, int]:
