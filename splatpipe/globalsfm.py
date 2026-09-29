@@ -149,8 +149,61 @@ def _relink(frames_dir: Path, chunk: Path, names: set[str]) -> int:
     return added
 
 
+def _select_cameras(rec, meta: dict, halo_m: float, rule: str) -> set[int]:
+    """Which of the cropped model's cameras this chunk should actually train on.
+
+    This is the knob that decides how much of its budget a tile spends on ground
+    it does not own. `model_cropper` keeps every image observing a point in the
+    box, which reaches a long way down a straight road: measured on gosheff, a
+    chunk trained ~300k gaussians and merge kept ~24k of them, because the other
+    92% fell in a neighbour's cell. A tile optimising mostly other people's
+    ground is a tile spending its budget badly, and global-first came out ~1 dB
+    below partition-first on exactly those chunks.
+
+      crop   every image model_cropper returned (what we shipped first)
+      cell   only cameras standing inside the cell plus its halo
+      inria  cameras inside the cell, OR within 2x the cell that also SEE at
+             least 50 points inside it -- the rule hierarchical-3DGS uses, and
+             the one this module should have copied along with the cropping
+    """
+    import numpy as np                           # noqa: PLC0415
+
+    e0, n0, e1, n1 = meta["bounds_enu_m"]
+    e0, e1 = min(e0, e1), max(e0, e1)
+    n0, n1 = min(n0, n1), max(n0, n1)
+    if rule == "crop":
+        return set(rec.images.keys())
+
+    inner = (e0 - halo_m, n0 - halo_m, e1 + halo_m, n1 + halo_m)
+    # 2x the cell about its centre, per the reference rule
+    ce, cn = (e0 + e1) / 2, (n0 + n1) / 2
+    we, wn = (e1 - e0), (n1 - n0)
+    outer = (ce - we, cn - wn, ce + we, cn + wn)
+
+    def inside(box, p):
+        return box[0] <= p[0] <= box[2] and box[1] <= p[1] <= box[3]
+
+    keep = set()
+    for iid, im in rec.images.items():
+        c = np.asarray(im.projection_center())
+        if inside(inner, c):
+            keep.add(iid)
+        elif rule == "inria" and inside(outer, c):
+            seen = 0
+            for p2 in im.points2D:
+                if p2.has_point3D():
+                    xyz = rec.points3D[p2.point3D_id].xyz
+                    if inside((e0, n0, e1, n1), xyz):
+                        seen += 1
+                        if seen >= 50:
+                            break
+            if seen >= 50:
+                keep.add(iid)
+    return keep
+
+
 def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
-                global_sparse: Path | None = None) -> dict:
+                global_sparse: Path | None = None, rule: str = "crop") -> dict:
     """Cut one chunk's sub-model out of the global reconstruction."""
     import pycolmap                              # noqa: PLC0415
 
@@ -167,9 +220,20 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
                     "--boundary", _bbox(meta, halo)], check=True)
 
     rec = pycolmap.Reconstruction(str(final))
+    if rule != "crop":
+        keep = _select_cameras(rec, meta, halo, rule)
+        dropped = [i for i in list(rec.images.keys()) if i not in keep]
+        for iid in dropped:
+            rec.deregister_image(iid)
+        for pid in [p for p, pt in rec.points3D.items() if pt.track.length() < 2]:
+            rec.delete_point3D(pid)
+        rec.write(str(final))
+        print(f"[global] {chunk.name}: rule={rule} kept {len(keep)} of "
+              f"{len(keep) + len(dropped)} cameras", flush=True)
+        rec = pycolmap.Reconstruction(str(final))
     names = {im.name for im in rec.images.values()}
     added = _relink(frames_dir, chunk, names)
-    stats = {"chunk": chunk.name, "images": rec.num_reg_images(),
+    stats = {"chunk": chunk.name, "rule": rule, "images": rec.num_reg_images(),
              "points": rec.num_points3D(), "linked": added}
     if stats["images"] < 2:
         # Not a warning. A chunk with nothing in it trains into an empty tile

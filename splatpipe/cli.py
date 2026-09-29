@@ -164,6 +164,11 @@ def main():
     s.add_argument("--chunks", required=True, type=Path)
     s.add_argument("--sparse", type=Path, help="default: <frames>/sparse/0")
     s.add_argument("--halo-m", type=float, help="default: each chunk's own overlap_m")
+    s.add_argument("--rule", default="crop", choices=["crop", "cell", "inria"],
+                   help="which cameras a chunk trains on. crop = everything "
+                        "model_cropper returned; cell = only cameras inside the "
+                        "cell+halo; inria = inside, or within 2x the cell and "
+                        "seeing 50+ points in it (hierarchical-3DGS's rule)")
 
     s = sub.add_parser(parents=[common], name="train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
@@ -415,7 +420,8 @@ def main():
         if not chunks:
             raise SystemExit(f"[global] no chunks under {args.chunks}")
         rows = [split_chunk(args.frames, c, halo_m=args.halo_m,
-                            global_sparse=args.sparse) for c in chunks]
+                            global_sparse=args.sparse, rule=args.rule)
+                for c in chunks]
         empty = [r["chunk"] for r in rows if r["images"] < 2]
         print(f"[global] split {len(rows)} chunks; "
               f"{sum(r['images'] for r in rows)} image memberships, "
