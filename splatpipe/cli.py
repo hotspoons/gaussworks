@@ -158,6 +158,15 @@ def main():
                                     "the chunk config's origin so the global model "
                                     "lands in the same world as the cell bounds")
 
+    s = sub.add_parser(parents=[common], name="global-refine",
+                       help="bundle-adjust the global model with GPS as a weak position "
+                            "prior: one model that also follows the map")
+    s.add_argument("--frames", required=True, type=Path)
+    s.add_argument("--out", type=Path, help="default: <frames>/sparse/prior")
+    s.add_argument("--sigma-xy-m", type=float, default=12.0, help="GPS horizontal error")
+    s.add_argument("--sigma-z-m", type=float, default=20.0, help="GPS vertical error")
+    s.add_argument("--max-iterations", type=int, default=40)
+
     s = sub.add_parser(parents=[common], name="global-split",
                        help="cut a global reconstruction into the existing chunks")
     s.add_argument("--frames", required=True, type=Path)
@@ -429,6 +438,11 @@ def main():
                      mapper=args.mapper,
                      loop_closure=(args.loop_closure or
                                    pcfg.get("loop_closure", "none")))
+
+    elif args.cmd == "global-refine":
+        from .globalsfm import refine_with_priors
+        refine_with_priors(args.frames, out=args.out, sigma_xy_m=args.sigma_xy_m,
+                           sigma_z_m=args.sigma_z_m, max_iterations=args.max_iterations)
 
     elif args.cmd == "global-split":
         from .globalsfm import split_all

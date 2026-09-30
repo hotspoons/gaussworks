@@ -474,3 +474,88 @@ def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
         raise SystemExit(f"[global] {len(holes)} chunk(s) came out empty with "
                          f"frames the global model never registered: {holes}")
     return rows
+
+
+def refine_with_priors(frames_dir: Path, out: Path | None = None,
+                       sigma_xy_m: float = 12.0, sigma_z_m: float = 20.0,
+                       max_iterations: int = 40, threads: int = 0) -> Path:
+    """Bundle-adjust the global model with GPS as a WEAK position prior.
+
+    Why this exists. A whole-capture solve with no GPS in the loop is locally
+    right and globally free: on the neighbourhood it registered every image
+    in one model, cut with seams of 0.02 m -- and drifted off the map. Against
+    the OSM road layer the GPS track sits a median 2.4 m from a road over the
+    whole drive (p90 13.9 m); the solve sits at p90 44.9 m, and on one 580-
+    frame stretch runs 37 m off-road where the GPS runs 1.6 m. An out-and-
+    back spur with no cross-links came out foreshortened by 350 m. A single
+    similarity alignment at the end (model_aligner) cannot remove
+    low-frequency drift, and the seam check cannot see it (journal 4.2).
+
+    Partition-first never had this problem because every chunk was aligned
+    to ITS OWN GPS -- which is also why the chunks disagreed. This is the
+    middle: one model, so neighbours cannot disagree, with the GPS pulling at
+    ~sigma so that the low-frequency shape follows the map while the image
+    constraints keep the local geometry rigid. Sigma is the GPS error under
+    canopy here (DOP up to 19: 12 m horizontal, worse vertically), and the
+    loss is robust so the cold-start fixes pull nothing.
+
+    Intrinsics stay fixed (exact virtual pinholes). Output goes beside the
+    input, never over it, so the two can be compared.
+    """
+    import numpy as np                           # noqa: PLC0415
+    import pycolmap                              # noqa: PLC0415
+
+    model = frames_dir / GLOBAL_SPARSE
+    out = out or (frames_dir / "sparse" / "prior")
+    rec = pycolmap.Reconstruction(str(model))
+    enu = {}
+    for ln in (frames_dir / "geo_enu.txt").read_text().splitlines():
+        parts = ln.split()
+        if len(parts) >= 4:
+            enu[parts[0]] = np.array([float(parts[1]), float(parts[2]), float(parts[3])])
+    cov = np.diag([sigma_xy_m ** 2, sigma_xy_m ** 2, sigma_z_m ** 2])
+    priors = {}
+    for iid, im in rec.images.items():
+        if im.name in enu:
+            pp = pycolmap.PosePrior()
+            pp.position = enu[im.name]
+            pp.position_covariance = cov
+            pp.coordinate_system = pycolmap.PosePriorCoordinateSystem.CARTESIAN
+            priors[iid] = pp
+    print(f"[global] priors for {len(priors):,} of {rec.num_reg_images():,} images "
+          f"(sigma {sigma_xy_m:.0f} m horizontal, {sigma_z_m:.0f} m vertical)", flush=True)
+
+    before = _prior_residual(rec, enu)
+    opts = pycolmap.BundleAdjustmentOptions()
+    opts.refine_focal_length = False
+    opts.refine_principal_point = False
+    opts.refine_extra_params = False
+    opts.refine_extrinsics = True
+    opts.print_summary = True
+    opts.solver_options.max_num_iterations = int(max_iterations)
+    opts.solver_options.num_threads = int(threads) if threads else max(1, (os.cpu_count() or 2) - 2)
+    popts = pycolmap.PosePriorBundleAdjustmentOptions()
+    popts.use_robust_loss_on_prior_position = True
+    popts.ransac_max_error = 0.0          # already in ENU; do not re-align
+    config = pycolmap.BundleAdjustmentConfig()
+    for iid in rec.images:
+        config.add_image(iid)
+    ba = pycolmap.create_pose_prior_bundle_adjuster(opts, popts, config, priors, rec)
+    ba.solve()
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    rec.write(str(out))
+    after = _prior_residual(rec, enu)
+    print(f"[global] |solve - GPS| median {before[0]:.1f} -> {after[0]:.1f} m, "
+          f"p90 {before[1]:.1f} -> {after[1]:.1f} m, max {before[2]:.1f} -> {after[2]:.1f} m; "
+          f"model written to {out}", flush=True)
+    return out
+
+
+def _prior_residual(rec, enu: dict) -> tuple[float, float, float]:
+    import numpy as np                           # noqa: PLC0415
+
+    d = np.array([np.linalg.norm(np.asarray(im.projection_center())[:2] - enu[im.name][:2])
+                  for im in rec.images.values() if im.name in enu])
+    return (float(np.median(d)), float(np.percentile(d, 90)), float(d.max())) if len(d) else (0., 0., 0.)
