@@ -202,7 +202,33 @@ def _select_cameras(rec, meta: dict, halo_m: float, rule: str) -> set[int]:
     return keep
 
 
-def refine_chunk(final: Path) -> tuple[float, float]:
+def reprojection_rms(rec, max_points: int = 40000) -> float:
+    """Root-mean-square reprojection error, measured, in pixels.
+
+    Not `compute_mean_reprojection_error`: that averages the error field
+    stored on each point, and model_cropper writes cropped points with that
+    field at zero, so on a cut model the stored figure reads 0.000 before AND
+    after anything is done to it. A check that cannot fail is not a check.
+    """
+    import numpy as np                           # noqa: PLC0415
+
+    pids = list(rec.points3D.keys())
+    step = max(1, len(pids) // max_points)
+    sq = []
+    for pid in pids[::step]:
+        pt = rec.points3D[pid]
+        for el in pt.track.elements:
+            im = rec.images[el.image_id]
+            p = im.cam_from_world * pt.xyz
+            if p[2] <= 0:
+                continue
+            uv = rec.cameras[im.camera_id].img_from_cam(p[:2] / p[2])
+            xy = im.points2D[el.point2D_idx].xy
+            sq.append(float(np.sum((np.asarray(uv) - xy) ** 2)))
+    return float(np.sqrt(np.mean(sq))) if sq else float("nan")
+
+
+def refine_chunk(final: Path, max_move_m: float = 0.5) -> dict:
     """Bundle-adjust the cut model locally, the step hierarchical-3DGS takes
     after ITS cut and the one this module left out.
 
@@ -214,11 +240,21 @@ def refine_chunk(final: Path) -> tuple[float, float]:
     the virtual pinholes are exact by construction (SEAM.md), and letting
     each cell re-estimate them is how neighbours start to disagree again.
 
-    Returns (reprojection error before, after) in pixels.
+    The crop also clips observations: a camera at the halo edge looking
+    outward keeps only the few points that fell inside the box, and a local
+    BA lets a camera that weakly constrained wander. Measured on gosheff,
+    the median camera moved 3-9 cm and one moved 5.4 m. So any camera that
+    moves more than `max_move_m` gets its global pose back: for that camera
+    the whole-capture solve is the better-conditioned estimate, and a 5 m
+    step at a cell edge is exactly the seam this ordering exists to remove.
     """
+    import numpy as np                           # noqa: PLC0415
     import pycolmap                              # noqa: PLC0415
 
-    before = pycolmap.Reconstruction(str(final)).compute_mean_reprojection_error()
+    before_rec = pycolmap.Reconstruction(str(final))
+    before = reprojection_rms(before_rec)
+    was = {iid: (im.cam_from_world, np.asarray(im.projection_center()))
+           for iid, im in before_rec.images.items()}
     subprocess.run(["colmap", "bundle_adjuster",
                     "--input_path", str(final), "--output_path", str(final),
                     "--BundleAdjustment.refine_focal_length", "0",
@@ -226,8 +262,21 @@ def refine_chunk(final: Path) -> tuple[float, float]:
                     "--BundleAdjustment.refine_extra_params", "0",
                     "--BundleAdjustment.refine_extrinsics", "1",
                     "--BundleAdjustment.max_num_iterations", "50"], check=True)
-    after = pycolmap.Reconstruction(str(final)).compute_mean_reprojection_error()
-    return before, after
+    rec = pycolmap.Reconstruction(str(final))
+    moved = np.array([np.linalg.norm(np.asarray(im.projection_center()) - was[iid][1])
+                      for iid, im in rec.images.items()])
+    reverted = 0
+    for iid, im in rec.images.items():
+        if np.linalg.norm(np.asarray(im.projection_center()) - was[iid][1]) > max_move_m:
+            im.cam_from_world = was[iid][0]
+            reverted += 1
+    if reverted:
+        rec.write(str(final))
+    after = reprojection_rms(rec)
+    return {"rms_before_px": before, "rms_after_px": after,
+            "moved_median_m": float(np.median(moved)) if len(moved) else 0.0,
+            "moved_max_m": float(moved.max()) if len(moved) else 0.0,
+            "reverted": reverted}
 
 
 def relocated_frames(frames_dir: Path, chunk: Path,
@@ -282,9 +331,11 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
               f"{len(keep) + len(dropped)} cameras", flush=True)
         rec = pycolmap.Reconstruction(str(final))
     if refine and rec.num_reg_images() >= 2:
-        before, after = refine_chunk(final)
-        print(f"[global] {chunk.name}: local BA, reprojection "
-              f"{before:.3f} -> {after:.3f} px", flush=True)
+        r = refine_chunk(final)
+        print(f"[global] {chunk.name}: local BA, reprojection RMS "
+              f"{r['rms_before_px']:.3f} -> {r['rms_after_px']:.3f} px; cameras moved "
+              f"median {r['moved_median_m'] * 100:.1f} cm, max {r['moved_max_m']:.2f} m; "
+              f"{r['reverted']} put back to their global pose", flush=True)
         rec = pycolmap.Reconstruction(str(final))
     names = {im.name for im in rec.images.values()}
     added = _relink(frames_dir, chunk, names)
