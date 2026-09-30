@@ -797,8 +797,71 @@ chosen cameras and every point two of them observe (x5_y-2: 278k → 320k points
 partition-first chunk's 296k); `--points retri` re-triangulates from the database with the
 poses fixed, so no seam can open (348k). Measured in §5.5.
 
-### 5.5 Checks that could not fail today
+### 5.5 The point rule closes the gap
 
+Grid 2, same cells, same shared held-out frames, inria cameras throughout:
+
+| variant | x5_y-2 | x2_y-3 | x4_y0 | gaussians |
+|---|---|---|---|---|
+| partition-first (control) | 22.26 | 21.13 | 20.21 | 992k / 780k / 724k |
+| global, box cut | 22.05 | 20.90 | 19.75 | 856k / 611k / 575k |
+| global, **seen** | **22.34** | **21.15** | **20.31** | 965k / 742k / 613k |
+| global, retri | 22.28 | 21.19 | — | 946k / 735k / — |
+
+`seen` matches or beats the partition-first control on every cell, and re-triangulating from
+the database adds nothing over it. So the whole "global-first costs quality" observation
+decomposes into: a held-out leak (bug), the camera rule reaching down the road (crop), and
+the box cut starving the background (points). None of it was the solve. The recipe is
+`--rule inria --points seen`, and it is now what `run` does under `poses.order: global`.
+
+### 5.6 One model, off the map
+
+With the neighbourhood cut and training, one last check before calling it: three cells in the
+north-west corner came out of the cut empty, and their frames (positions 814-1155, not the cold
+start) were registered 300+ m from their GPS. Neither track jumps — the solve-to-GPS offset
+grows smoothly from 210 m to 350 m and back over 360 positions. Which one is wrong?
+
+The OSM road layer is the ground truth neither of them was fitted to. Distance from each cam0
+position to the nearest mapped road:
+
+| | all 5,075 frames | frames 3201-3782 | frames 2386-2510 |
+|---|---|---|---|
+| GPS track | median 2.4 m, p90 13.9 m | 1.6 m / 4.2 m | 3.1 m / 5.1 m |
+| global solve | median 2.5 m, p90 **44.9 m** | **37.3 m** / 50.9 m | **16.6 m** / 52.3 m |
+
+**The GPS is on the road and the solve is not.** 44% of frames sit more than 20 m from their
+fix, 18% more than 50 m, and the north-west spur — an out-and-back with no cross-links — came
+out foreshortened by 350 m: the solve's step length along it is 1.4 m against the GPS's 2.5 m.
+The drive ends at DOP 1.4 and the solve is 33 m off there too.
+
+A whole-capture solve with no GPS in the loop is locally exact and globally free. One
+similarity at the end (`model_aligner`) removes a global offset, rotation and scale, and cannot
+touch drift that bends along the route. The seam check reads 0.02 m on this world because the
+chunks share the drift (§4.1); §4.2 predicted exactly this and measured a small version of it
+on gosheff (0.2 m/100 m vertical, on a 350 m-radius loop). At neighbourhood scale, with 2 km
+spurs, it is tens to hundreds of metres. The previous alignment error that `model_aligner`
+printed — 49.7 m mean — was this number, and it was set aside as "not a quality metric".
+
+Partition-first never had this failure, because every chunk was aligned to its own GPS, which
+is also precisely why its chunks disagreed. The two orderings fail in opposite directions:
+
+| | local rigidity | follows the map |
+|---|---|---|
+| partition-first, GPS per chunk | seams to 67 m | yes, to GPS noise |
+| global, one similarity at the end | 0.02 m | drifts to 350 m |
+| global, GPS as a weak prior in the BA | — | — |
+
+The third row is `global-refine`: the COLMAP pose-prior bundle adjuster over the global model,
+with each camera's GPS fix as a prior at the canopy's error (sigma 12 m horizontal, 20 m
+vertical) under a robust loss. Image constraints keep the local geometry rigid, the priors pull
+the low-frequency shape onto the map, and the cold-start fixes pull nothing. The database
+already held all 30,786 priors; nothing downstream had ever read them. Measured next.
+
+### 5.7 Checks that could not fail today
+
+- `seams` on a global-first world — again. It read 0.02 m over a model that was 350 m wrong.
+  The check that CAN see this is the residual against an external map (§5.6), and it is now
+  what `global-refine` prints before and after.
 - `compute_mean_reprojection_error` on a cropped model reads **0.000** before and after
   anything is done to it: `model_cropper` writes the per-point error field as zero. The first
   `--refine` printed `0.000 -> 0.000` and looked like a no-op. The RMS is now projected by hand.
