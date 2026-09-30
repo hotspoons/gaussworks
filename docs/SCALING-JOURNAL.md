@@ -858,8 +858,31 @@ the low-frequency shape onto the map, and the cold-start fixes pull nothing. The
 already held all 30,786 priors; nothing downstream had ever read them.
 
 Trial on gosheff (4,998 images, 262 s): |solve − GPS| p90 11.0 → 5.4 m, max 16.6 → 8.6 m, with
-the reprojection cost at 0.588 → 0.572 px. The map correction costs the images nothing. The
-neighbourhood is running.
+the reprojection cost at 0.588 → 0.572 px. The map correction costs the images nothing.
+
+On the neighbourhood it did nothing: 41 iterations, p90 138.6 → 128.6 m, max 352 → 340 m. Two
+reasons, both obvious afterwards. A **robust loss** on the priors is built to ignore residuals
+many sigma out — and 10-30 sigma is exactly where the drift put them, so the priors that
+mattered most weighed least. And **bundle adjustment is local**: the direction that stretches
+a foreshortened spur back to length is nearly free in the image cost (which is why it drifted),
+but a trust-region step walks it a metre at a time.
+
+So two changes. `global-refine` now runs a plain least-squares pass on the priors first
+(`pull`) and the robust pass second. And `global-warp` gives it a start: per frame, fit a 2-D
+similarity (yaw, scale, shift — never tilt, GPS altitude is the noisy axis) plus a height shift
+from the solve to the GPS over ±100 positions, move that frame's cameras by it and every point
+by the mean of its observers' transforms. Over 175 m the transform is nearly constant, so the
+local geometry survives; the low-frequency shape, the only thing that was wrong, is what moves.
+Scales came out 0.87-1.69 along the route. Result, before any BA:
+
+| | |solve − GPS| median / p90 / max | to nearest OSM road, p90 | frames 3201-3782, median |
+|---|---|---|---|
+| GPS | — | 13.9 m | 1.6 m |
+| global solve | 14.2 / 138.6 / 352.5 m | 44.9 m | 37.3 m |
+| warped | 1.6 / 7.7 / 19.1 m | 12.3 m | 1.3 m |
+
+The warped model sits on the map as well as the GPS does. The pull-then-robust refine from it is
+what the cells are cut from.
 
 ### 5.7 Checks that could not fail today
 

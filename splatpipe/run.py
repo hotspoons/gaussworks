@@ -251,7 +251,7 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                          origin=_origin(ccfg.get("origin")))
 
     if order == "global":
-        from .globalsfm import refine_with_priors, solve_global, split_all
+        from .globalsfm import refine_with_priors, solve_global, split_all, warp_to_priors
         origin = _origin(ccfg.get("origin"))
         if origin is None:
             raise SystemExit("[run] poses.order: global needs chunk.origin in the "
@@ -274,7 +274,10 @@ def run(capture: Path, out: Path, role: str, config: str | None,
         # capture without usable fixes turns it off with poses.priors: false.
         cut_from = None
         if pcfg.get("priors", True):
-            cut_from = refine_with_priors(frames,
+            # warp first: BA is local, and from hundreds of metres away it
+            # crawls. The warp is near-identity when the drift is small.
+            warped = warp_to_priors(frames, window=int(pcfg.get("warp_window", 100)))
+            cut_from = refine_with_priors(frames, model=warped,
                                           sigma_xy_m=float(pcfg.get("prior_sigma_xy_m", 12.0)),
                                           sigma_z_m=float(pcfg.get("prior_sigma_z_m", 20.0)))
         split_all(frames, chunks, rule=pcfg.get("rule", "inria"),
