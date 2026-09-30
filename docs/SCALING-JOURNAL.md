@@ -806,7 +806,7 @@ Grid 2, same cells, same shared held-out frames, inria cameras throughout:
 | partition-first (control) | 22.26 | 21.13 | 20.21 | 992k / 780k / 724k |
 | global, box cut | 22.05 | 20.90 | 19.75 | 856k / 611k / 575k |
 | global, **seen** | **22.34** | **21.15** | **20.31** | 965k / 742k / 613k |
-| global, retri | 22.28 | 21.19 | — | 946k / 735k / — |
+| global, retri | 22.28 | 21.19 | 20.34 | 946k / 735k / 628k |
 
 `seen` matches or beats the partition-first control on every cell, and re-triangulating from
 the database adds nothing over it. So the whole "global-first costs quality" observation
@@ -855,7 +855,11 @@ The third row is `global-refine`: the COLMAP pose-prior bundle adjuster over the
 with each camera's GPS fix as a prior at the canopy's error (sigma 12 m horizontal, 20 m
 vertical) under a robust loss. Image constraints keep the local geometry rigid, the priors pull
 the low-frequency shape onto the map, and the cold-start fixes pull nothing. The database
-already held all 30,786 priors; nothing downstream had ever read them. Measured next.
+already held all 30,786 priors; nothing downstream had ever read them.
+
+Trial on gosheff (4,998 images, 262 s): |solve − GPS| p90 11.0 → 5.4 m, max 16.6 → 8.6 m, with
+the reprojection cost at 0.588 → 0.572 px. The map correction costs the images nothing. The
+neighbourhood is running.
 
 ### 5.7 Checks that could not fail today
 

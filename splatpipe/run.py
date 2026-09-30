@@ -251,7 +251,7 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                          origin=_origin(ccfg.get("origin")))
 
     if order == "global":
-        from .globalsfm import solve_global, split_all
+        from .globalsfm import refine_with_priors, solve_global, split_all
         origin = _origin(ccfg.get("origin"))
         if origin is None:
             raise SystemExit("[run] poses.order: global needs chunk.origin in the "
@@ -268,9 +268,18 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                      spatial_radius=pcfg.get("spatial_radius", 4),
                      mapper=pcfg.get("mapper", "auto"),
                      loop_closure=pcfg.get("loop_closure", "none"))
+        # GPS as a weak prior in one more bundle adjustment (journal 5.6): a
+        # free global solve follows itself, not the map -- 350 m off on the
+        # neighbourhood -- and the seam check cannot tell. On by default; a
+        # capture without usable fixes turns it off with poses.priors: false.
+        cut_from = None
+        if pcfg.get("priors", True):
+            cut_from = refine_with_priors(frames,
+                                          sigma_xy_m=float(pcfg.get("prior_sigma_xy_m", 12.0)),
+                                          sigma_z_m=float(pcfg.get("prior_sigma_z_m", 20.0)))
         split_all(frames, chunks, rule=pcfg.get("rule", "inria"),
                   refine=bool(pcfg.get("refine", False)),
-                  points=str(pcfg.get("points", "box")))
+                  points=str(pcfg.get("points", "seen")), global_sparse=cut_from)
         # The seam check passes by construction on a global-first world (the
         # chunks share one model: entry 4.1), so it is reported, never a bar.
         # The bar that matters was solve_global's coverage, already applied.

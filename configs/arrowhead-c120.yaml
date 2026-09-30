@@ -89,6 +89,24 @@ corridor:
   gap_s: 30
 
 poses:
+  # Solve the whole capture ONCE, refine it against the GPS, then cut it into
+  # the cells. Partition-first on these 49 cells put 20 of 47 seams over 3 m
+  # (worst 67 m); one model cuts at 0.02 m. But one model with no GPS in the
+  # loop drifted 350 m off the map on the north-west spur, so the GPS goes
+  # back in as a weak prior (sigma = the canopy's error), robustly. Journal
+  # entry 5 has every number; run.py reads these four.
+  order: global
+  mapper: glomap
+  priors: true
+  prior_sigma_xy_m: 12
+  prior_sigma_z_m: 20
+  # what each cell trains on: cameras standing in the cell+halo or seeing
+  # 50+ of its points (hierarchical-3DGS's rule), and every point those
+  # cameras observe -- not only the ones inside the box. Measured against
+  # the same cells solved partition-first, on the same held-out frames:
+  # box cut -0.3 dB, seen +0.1 dB.
+  rule: inria
+  points: seen
   matcher: spatial
   align: true
   # Canopy is the known risk here (docs/TRAILVIEW.md makes the same point for
