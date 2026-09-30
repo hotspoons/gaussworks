@@ -354,3 +354,41 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
     except Exception as exc:                      # noqa: BLE001
         print(f"[global] {chunk.name}: corridor refresh skipped ({exc})", flush=True)
     return stats
+
+
+def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
+              refine: bool = False, halo_m: float | None = None,
+              global_sparse: Path | None = None) -> list[dict]:
+    """Cut every chunk out of the global model; park cells that the solve
+    emptied by putting their GPS-dealt frames elsewhere; refuse on a hole."""
+    from .poses import list_chunks                # noqa: PLC0415
+
+    chunks = list_chunks(chunks_dir)
+    if not chunks:
+        raise SystemExit(f"[global] no chunks under {chunks_dir}")
+    rows = [split_chunk(frames_dir, c, halo_m=halo_m, global_sparse=global_sparse,
+                        rule=rule, refine=refine) for c in chunks]
+    print(f"[global] split {len(rows)} chunks; "
+          f"{sum(r['images'] for r in rows)} image memberships, "
+          f"{sum(r['linked'] for r in rows)} new links", flush=True)
+    holes = []
+    for name in [r["chunk"] for r in rows if r["images"] < 2]:
+        chunk = chunks_dir / name
+        dealt, registered = relocated_frames(frames_dir, chunk, global_sparse)
+        if dealt and registered >= 0.9 * dealt:
+            # the GPS dealt these frames to a cell the solve says they are
+            # not in; the model has them, in the neighbours' cuts
+            parked = chunks_dir / "relocated" / name
+            parked.parent.mkdir(exist_ok=True)
+            if parked.exists():
+                shutil.rmtree(parked)
+            shutil.move(str(chunk), str(parked))
+            print(f"[global] {name}: empty because its {dealt} frames are "
+                  f"registered elsewhere ({registered} in the global model): "
+                  f"a GPS-dealt cell, not a hole. Parked at {parked}", flush=True)
+        else:
+            holes.append((name, dealt, registered))
+    if holes:
+        raise SystemExit(f"[global] {len(holes)} chunk(s) came out empty with "
+                         f"frames the global model never registered: {holes}")
+    return rows

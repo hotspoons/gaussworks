@@ -2,7 +2,6 @@
 """splatpipe CLI: ingest -> chunk -> poses -> train."""
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -427,40 +426,9 @@ def main():
                                    pcfg.get("loop_closure", "none")))
 
     elif args.cmd == "global-split":
-        from .globalsfm import split_chunk
-        from .poses import list_chunks
-        chunks = list_chunks(args.chunks)
-        if not chunks:
-            raise SystemExit(f"[global] no chunks under {args.chunks}")
-        from .globalsfm import relocated_frames
-        rows = [split_chunk(args.frames, c, halo_m=args.halo_m,
-                            global_sparse=args.sparse, rule=args.rule,
-                            refine=args.refine)
-                for c in chunks]
-        empty = [r["chunk"] for r in rows if r["images"] < 2]
-        print(f"[global] split {len(rows)} chunks; "
-              f"{sum(r['images'] for r in rows)} image memberships, "
-              f"{sum(r['linked'] for r in rows)} new links")
-        holes = []
-        for name in empty:
-            chunk = args.chunks / name
-            dealt, registered = relocated_frames(args.frames, chunk, args.sparse)
-            if dealt and registered >= 0.9 * dealt:
-                # the GPS dealt these frames to a cell the solve says they are
-                # not in; the model has them, in the neighbours' cuts
-                parked = args.chunks / "relocated" / name
-                parked.parent.mkdir(exist_ok=True)
-                if parked.exists():
-                    shutil.rmtree(parked)
-                shutil.move(str(chunk), str(parked))
-                print(f"[global] {name}: empty because its {dealt} frames are "
-                      f"registered elsewhere ({registered} in the global model): "
-                      f"a GPS-dealt cell, not a hole. Parked at {parked}")
-            else:
-                holes.append((name, dealt, registered))
-        if holes:
-            raise SystemExit(f"[global] {len(holes)} chunk(s) came out empty with "
-                             f"frames the global model never registered: {holes}")
+        from .globalsfm import split_all
+        split_all(args.frames, args.chunks, rule=args.rule, refine=args.refine,
+                  halo_m=args.halo_m, global_sparse=args.sparse)
 
     elif args.cmd == "train":
         from .train import train_all

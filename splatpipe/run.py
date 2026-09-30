@@ -80,7 +80,8 @@ def _wait_for_chunks(work: Path, timeout_s: float) -> Path:
 GATE_FILE = ".seam-gate.json"
 
 
-def _seam_gate(chunks: Path, fail_over: float | None, out: Path | None = None) -> dict:
+def _seam_gate(chunks: Path, fail_over: float | None, out: Path | None = None,
+               advisory: bool = False) -> dict:
     """Decide whether this world is worth training, and record the verdict.
 
     Seam agreement reads corridor.json, which POSES produces -- so a world can
@@ -108,7 +109,7 @@ def _seam_gate(chunks: Path, fail_over: float | None, out: Path | None = None) -
     """
     from .seams import measure
 
-    verdict: dict = {"fail_over": fail_over}
+    verdict: dict = {"fail_over": fail_over, "advisory": advisory}
     if fail_over is None:
         verdict |= {"ok": True, "skipped": True}
         print("[run] seam gate disabled (--seam-fail-over none)", flush=True)
@@ -123,15 +124,19 @@ def _seam_gate(chunks: Path, fail_over: float | None, out: Path | None = None) -
         else:
             worst = max(r[3] for r in rows)
             med = sorted(r[3] for r in rows)[len(rows) // 2]
-            ok = worst <= fail_over
+            # On a global-first world the chunks share one model and this
+            # passes by construction (journal 4.1): still worth a line in the
+            # log, never a verdict.
+            ok = advisory or worst <= fail_over
             verdict |= {"ok": ok, "worst": worst, "median": med,
                         "seams": len(rows), "chunks": n,
                         "offenders": sorted({c for a, b, _, m, _ in rows if m > fail_over
                                              for c in (a, b)})}
             print(f"[run] seam gate: {len(rows)} seams, median {med:.2f} m, "
                   f"worst {worst:.2f} m against a {fail_over:.2f} m bar -- "
-                  f"{'PASS' if ok else 'FAIL'}", flush=True)
-            if not ok:
+                  f"{'ADVISORY (one model, cannot fail)' if advisory else 'PASS' if ok else 'FAIL'}",
+                  flush=True)
+            if not ok or (advisory and worst > fail_over):
                 print(f"[run] chunks over the bar: {verdict['offenders']}", flush=True)
     blob = json.dumps(verdict, indent=1)
     (chunks / GATE_FILE).write_text(blob)
@@ -190,19 +195,32 @@ def run(capture: Path, out: Path, role: str, config: str | None,
     work = work or (out / ".work")
     work.mkdir(parents=True, exist_ok=True)
 
+    pcfg = _cfg(config, "poses")
+    tcfg = _cfg(config, "train")
+    # partition-first solves every chunk on its own and hopes they agree;
+    # global-first solves the capture ONCE and cuts it (SCALING-JOURNAL.md,
+    # entries 3-5). The order is a property of the world, so it lives in the
+    # config next to the mapper, not on the command line.
+    order = str(pcfg.get("order", "partition"))
+    if order not in ("partition", "global"):
+        raise SystemExit(f"[run] poses.order must be partition or global, not {order!r}")
+    scene_scale_m = tcfg.get("scene_scale_m")
+
     if role == "worker":
         chunks = _wait_for_chunks(work, timeout_s)
-        pcfg = _cfg(config, "poses")
-        solve_all(chunks, matcher=pcfg.get("matcher", "spatial"),
-                  align=pcfg.get("align", True),
-                  spatial_radius=pcfg.get("spatial_radius", 4),
-                  loop_closure=pcfg.get("loop_closure", "none"))
-        _wait_for_stage(chunks, "poses", timeout_s)
+        if order == "partition":
+            solve_all(chunks, matcher=pcfg.get("matcher", "spatial"),
+                      align=pcfg.get("align", True),
+                      spatial_radius=pcfg.get("spatial_radius", 4),
+                      loop_closure=pcfg.get("loop_closure", "none"))
+            _wait_for_stage(chunks, "poses", timeout_s)
+        # global-first: the leader solves and cuts alone (one model, one pod),
+        # and the gate file is the signal that the chunks are ready to train
         if not _wait_for_gate(chunks, timeout_s)["ok"]:
             print("[run] worker: leader rejected this world at the seam gate, "
                   "not training", flush=True)
             return out
-        train_all(chunks)
+        train_all(chunks, scene_scale_m=scene_scale_m)
         print("[run] worker done", flush=True)
         return out
 
@@ -232,14 +250,39 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                          corridor_cfg=_cfg(config, "corridor"),
                          origin=_origin(ccfg.get("origin")))
 
-    # the leader is also a worker: on a one-pod run this is the whole pipeline, and on a
-    # JobSet it just means the leader's GPU is not idle while the workers grind
-    pcfg = _cfg(config, "poses")
-    solve_all(chunks, matcher=pcfg.get("matcher", "spatial"), align=pcfg.get("align", True),
-              spatial_radius=pcfg.get("spatial_radius", 4),
-              loop_closure=pcfg.get("loop_closure", "none"))
-    _wait_for_stage(chunks, "poses", timeout_s)
-    gate = _seam_gate(chunks, seam_fail_over, out=out)
+    if order == "global":
+        from .globalsfm import solve_global, split_all
+        origin = _origin(ccfg.get("origin"))
+        if origin is None:
+            raise SystemExit("[run] poses.order: global needs chunk.origin in the "
+                             "config, or the global model and the cell bounds "
+                             "will not share a frame")
+        # One solve over the whole capture (solve_global refuses a partial one:
+        # under GLOBAL_MIN_COVERAGE of the frames registered is a hole, not a
+        # world), then every cell cut from it. Nothing here is claim-based --
+        # a global solve is one process by nature -- so the workers wait on
+        # the gate file rather than the poses queue.
+        solve_global(frames, origin,
+                     matcher=pcfg.get("matcher", "spatial"),
+                     align=pcfg.get("align", True),
+                     spatial_radius=pcfg.get("spatial_radius", 4),
+                     mapper=pcfg.get("mapper", "auto"),
+                     loop_closure=pcfg.get("loop_closure", "none"))
+        split_all(frames, chunks, rule=pcfg.get("rule", "inria"),
+                  refine=bool(pcfg.get("refine", False)))
+        # The seam check passes by construction on a global-first world (the
+        # chunks share one model: entry 4.1), so it is reported, never a bar.
+        # The bar that matters was solve_global's coverage, already applied.
+        gate = _seam_gate(chunks, seam_fail_over, out=out, advisory=True)
+    else:
+        # the leader is also a worker: on a one-pod run this is the whole
+        # pipeline, and on a JobSet it just means the leader's GPU is not idle
+        # while the workers grind
+        solve_all(chunks, matcher=pcfg.get("matcher", "spatial"), align=pcfg.get("align", True),
+                  spatial_radius=pcfg.get("spatial_radius", 4),
+                  loop_closure=pcfg.get("loop_closure", "none"))
+        _wait_for_stage(chunks, "poses", timeout_s)
+        gate = _seam_gate(chunks, seam_fail_over, out=out)
     if not gate["ok"]:
         # Non-zero, with the number on stdout: a scheduler's run object then
         # fails visibly instead of publishing a world nobody trusts.
@@ -248,7 +291,7 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                          f"{'none measured' if worst is None else format(worst, '.2f') + ' m'} "
                          f"against a {seam_fail_over:.2f} m bar. Not training. "
                          f"Verdict in {chunks / GATE_FILE}.")
-    train_all(chunks)
+    train_all(chunks, scene_scale_m=scene_scale_m)
     _wait_for_stage(chunks, "train", timeout_s)
 
     out.mkdir(parents=True, exist_ok=True)
