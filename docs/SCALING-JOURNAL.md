@@ -716,6 +716,95 @@ that catches all three is the same and it is cheap: **make the check fail on pur
 believing that it passed** — and where that is impossible, exercise the real mechanism rather
 than a proxy for it.
 
+## Entry 5 — 2026-09-30: the neighbourhood solved once, and the "1 dB" that was two measurement bugs
+
+Entry 4 proved the ordering on nine gosheff cells. This entry did it on the neighbourhood, and
+then chased the quality cost that had been reported alongside it.
+
+### 5.1 Arrowhead, 49 cells, one model
+
+GLOMAP over all 30,786 images, reusing the 41 GB matched database: 17 h 42 on one GH200, three
+global bundle-adjustment passes, every camera in one model. Cut into the c120 cells:
+
+| | median seam | worst seam | cells over 3 m |
+|---|---|---|---|
+| partition-first (§2.4a) | 0.76 m | 67.33 m | 20 of 47 |
+| global-first | **0.02 m** | **0.39 m** | 0 |
+
+With the §4.1 caveat intact: this is the failure mode being structurally absent, not a quality
+score. One cell, `chunk_x-9_y8`, came out of the cut empty. Its 204 frames are the drive's first
+45 s — the DOP-36 cold start (§1.0) — and the global model registered all 1,224 of their views
+200 m from where the GPS dealt them. The GPS was wrong, the solve was right, and the cell never
+existed. `global-split` now parks such a cell instead of failing the run; a cell whose frames
+are *unregistered* still fails it, because that is a hole.
+
+### 5.2 The comparison that was never made
+
+Every "global-first costs ~1 dB" figure had compared gosheff cells solved globally against
+*arrowhead* cells solved per-chunk: different streets. The partition-first solve of the same
+three gosheff cells was on disk, untrained. Training it, and re-reading the earlier grids,
+turned up two measurement faults before any pipeline fault:
+
+1. **The held-out split was by list index.** gsplat holds out `index % 8 == 0` over the sorted
+   image list, so every camera rule (crop / cell / inria) held out DIFFERENT views, and the
+   rules that keep only local cameras held out easier ones. Worse, a rig writes six views per
+   frame: holding out `cam0/000874` while training on `cam1..5/000874` is a leak, and every
+   PSNR in this journal so far carried it. Fixed by holding out by *frame number*
+   (`holdout.py`): a frame is held out in every variant that contains it, all six views at
+   once, and two variants are scored on the frames they *both* hold out (`eval --names`).
+2. **gsplat's scene scale is the camera spread.** It sets the densification thresholds and the
+   position learning rate. The crop rule keeps every camera that sees a point in the box, which
+   on a straight road is a long way: the same cell trained at scene scale 337 m under crop and
+   119 m under partition-first, and grew 155k gaussians against 1.08M from the same images and
+   steps. That was the whole "global-first is worse" observation, and it was the trainer
+   measuring how far the cameras reached. The inria rule brings the scale back to 120-131 m by
+   itself; `train --scene-scale-m` pins it outright, because a world is built from tiles of one
+   physical size and that is the scale to densify at.
+
+### 5.3 Same cells, same held-out frames, five ways
+
+Three gosheff cells, 30k steps, scored at 1620 px on the 140-156 frames per cell that every
+variant holds out:
+
+| variant | x5_y-2 | x2_y-3 | x4_y0 | gaussians |
+|---|---|---|---|---|
+| partition-first | 22.26 | 21.13 | 20.21 | 992k / 780k / 724k |
+| partition-first, scale pinned 120 m | 22.26 | 21.12 | 20.23 | 998k / 772k / 704k |
+| global, inria cameras | 22.05 | 20.90 | 19.75 | 856k / 611k / 575k |
+| global, inria, scale pinned 120 m | 22.03 | 20.57 | 19.66 | 872k / 604k / 577k |
+| global, inria, local BA after the cut | 22.01 | 20.87 | 19.73 | 866k / 673k / 578k |
+
+Read against a noise floor: the two partition-first rows differ by ≤0.02 dB, four of the five
+pinned-vs-unpinned pairs by ≤0.1 dB, and one pair by 0.33 dB at the same scale. So a gap under
+~0.3 dB on one cell is not a finding.
+
+What survives that bar: global-first with the inria rule trails partition-first by **0.2-0.5 dB,
+mean 0.3**, with 10-20% fewer gaussians — on a fair test, against a control on the same street.
+Not the 1 dB reported, and not zero either. Pinning the scale does nothing once the camera rule
+is local (its measured scale was already 120-131 m). Local bundle adjustment does nothing
+either, and it is not free: hand-measured reprojection RMS is 1.18 px for the cut against 1.15
+for partition-first — the poses were never the gap — and the BA moved the median camera 3-9 cm
+but one camera 5.4 m, an edge camera whose observations the crop had clipped. `--refine` keeps
+the step but puts any camera that moves over 0.5 m back on its global pose.
+
+### 5.4 What is left is the cut, not the solve
+
+The box crop keeps only points inside the cell+halo. A partition-first chunk was never boxed:
+6-12% of its points sit outside (median 17 m out, p90 60-100 m), and they are the background
+every outward-looking held-out view is scored against. The cut starts training that background
+from nothing. `global-split --points seen` rebuilds the cut from the global model with the
+chosen cameras and every point two of them observe (x5_y-2: 278k → 320k points, more than the
+partition-first chunk's 296k); `--points retri` re-triangulates from the database with the
+poses fixed, so no seam can open (348k). Measured in §5.5.
+
+### 5.5 Checks that could not fail today
+
+- `compute_mean_reprojection_error` on a cropped model reads **0.000** before and after
+  anything is done to it: `model_cropper` writes the per-point error field as zero. The first
+  `--refine` printed `0.000 -> 0.000` and looked like a no-op. The RMS is now projected by hand.
+- The coverage guard printed `30,786 of 30,450 images registered (101%)`: its denominator is
+  the GPS-fixed frames, and the cold start has none. Harmless here; a lie in general.
+
 ## Open problems
 
 Ordered by how much they will hurt at network scale.
