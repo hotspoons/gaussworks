@@ -300,9 +300,13 @@ def relocated_frames(frames_dir: Path, chunk: Path,
     return len(names), sum(1 for n in names if n in have)
 
 
-def _keep_seen_points(model: Path, final: Path, keep_names: set[str]) -> None:
-    """Rebuild the cut from the GLOBAL model with the chosen cameras and every
-    point two of them observe, wherever it lies.
+SEEN_REACH_M = 300.0
+
+
+def _keep_seen_points(model: Path, final: Path, meta: dict, halo_m: float,
+                      keep_names: set[str]) -> None:
+    """Rebuild the cut with the chosen cameras and every point two of them
+    observe within SEEN_REACH_M of the cell, wherever it lies.
 
     model_cropper keeps only points inside the box. A partition-first chunk
     was never boxed: it holds whatever its cameras saw, and 6-12% of its
@@ -310,18 +314,26 @@ def _keep_seen_points(model: Path, final: Path, keep_names: set[str]) -> None:
     houses, trees and road beyond the halo that every view looking outward
     is scored against. A cut that drops them starts training the background
     from nothing.
+
+    Done with the cropper and a wide box rather than by loading the global
+    model in Python: eight of those loads of the neighbourhood model (4.5M
+    points, 30k images) OOM-killed a 128 GiB pod. The cropper is C++ and
+    streams; 300 m of reach covers the p90 with room to spare.
     """
     import pycolmap                              # noqa: PLC0415
 
-    rec = pycolmap.Reconstruction(str(model))
+    shutil.rmtree(final)
+    final.mkdir(parents=True)
+    subprocess.run(["colmap", "model_cropper",
+                    "--input_path", str(model), "--output_path", str(final),
+                    "--boundary", _bbox(meta, halo_m + SEEN_REACH_M)], check=True)
+    rec = pycolmap.Reconstruction(str(final))
     # COLMAP's DeRegisterImage drops each observation and deletes any point
     # whose track falls below two, so what is left is exactly the points the
     # kept cameras still triangulate between them.
     for iid, im in list(rec.images.items()):
         if im.name not in keep_names:
             rec.deregister_image(iid)
-    shutil.rmtree(final)
-    final.mkdir(parents=True)
     rec.write(str(final))
 
 
@@ -384,7 +396,7 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
         rec = pycolmap.Reconstruction(str(final))
     if points != "box":
         boxed = rec.num_points3D()
-        _keep_seen_points(model, final, {rec.images[i].name for i in keep})
+        _keep_seen_points(model, final, meta, halo, {rec.images[i].name for i in keep})
         if points == "retri":
             _retriangulate(frames_dir, final)
         rec = pycolmap.Reconstruction(str(final))
