@@ -173,6 +173,10 @@ def main():
                    help="bundle-adjust each cut model locally (extrinsics + points, "
                         "intrinsics fixed), as hierarchical-3DGS does after its cut")
     s.add_argument("--only", nargs="*", help="chunk name substrings: cut just these")
+    s.add_argument("--points", default="box", choices=["box", "seen", "retri"],
+                   help="which 3D points the cut keeps: box = inside cell+halo; "
+                        "seen = every point the kept cameras observe; retri = seen, "
+                        "then re-triangulated from the database with poses fixed")
 
     s = sub.add_parser(parents=[common], name="train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
@@ -429,7 +433,8 @@ def main():
     elif args.cmd == "global-split":
         from .globalsfm import split_all
         split_all(args.frames, args.chunks, rule=args.rule, refine=args.refine,
-                  halo_m=args.halo_m, global_sparse=args.sparse, only=args.only)
+                  halo_m=args.halo_m, global_sparse=args.sparse, only=args.only,
+                  points=args.points)
 
     elif args.cmd == "train":
         from .train import train_all

@@ -300,12 +300,64 @@ def relocated_frames(frames_dir: Path, chunk: Path,
     return len(names), sum(1 for n in names if n in have)
 
 
-def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
-                global_sparse: Path | None = None, rule: str = "crop",
-                refine: bool = False) -> dict:
-    """Cut one chunk's sub-model out of the global reconstruction."""
+def _keep_seen_points(model: Path, final: Path, keep_names: set[str]) -> None:
+    """Rebuild the cut from the GLOBAL model with the chosen cameras and every
+    point two of them observe, wherever it lies.
+
+    model_cropper keeps only points inside the box. A partition-first chunk
+    was never boxed: it holds whatever its cameras saw, and 6-12% of its
+    points sit outside the cell+halo (median 17 m out, p90 60-100 m) -- the
+    houses, trees and road beyond the halo that every view looking outward
+    is scored against. A cut that drops them starts training the background
+    from nothing.
+    """
     import pycolmap                              # noqa: PLC0415
 
+    rec = pycolmap.Reconstruction(str(model))
+    # COLMAP's DeRegisterImage drops each observation and deletes any point
+    # whose track falls below two, so what is left is exactly the points the
+    # kept cameras still triangulate between them.
+    for iid, im in list(rec.images.items()):
+        if im.name not in keep_names:
+            rec.deregister_image(iid)
+    shutil.rmtree(final)
+    final.mkdir(parents=True)
+    rec.write(str(final))
+
+
+def _retriangulate(frames_dir: Path, final: Path) -> None:
+    """Triangulate the cut afresh from the capture's own matches, poses fixed.
+
+    The global solve's tracks are what one mapper made over 30k images; a
+    partition-first chunk's final model carried ~17% more observations per
+    image on the same cameras. point_triangulator re-derives points from the
+    database for the registered images only (it filters the cache by image
+    name, so the 41 GB neighbourhood database is not read whole), leaves the
+    extrinsics alone -- no seam can open -- and refines nothing but points.
+    """
+    subprocess.run(["colmap", "point_triangulator",
+                    "--database_path", str(frames_dir / "colmap.db"),
+                    "--image_path", str(frames_dir / "images"),
+                    "--input_path", str(final), "--output_path", str(final),
+                    "--clear_points", "1",
+                    "--Mapper.ba_refine_focal_length", "0",
+                    "--Mapper.ba_refine_principal_point", "0",
+                    "--Mapper.ba_refine_extra_params", "0"], check=True)
+
+
+def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
+                global_sparse: Path | None = None, rule: str = "crop",
+                refine: bool = False, points: str = "box") -> dict:
+    """Cut one chunk's sub-model out of the global reconstruction.
+
+    `points` decides which 3D points the cut keeps: `box` = inside the
+    cell+halo (model_cropper), `seen` = everything the kept cameras observe,
+    `retri` = seen, then re-triangulated from the database with poses fixed.
+    """
+    import pycolmap                              # noqa: PLC0415
+
+    if points not in ("box", "seen", "retri"):
+        raise SystemExit(f"[global] points must be box, seen or retri, not {points!r}")
     model = global_sparse or (frames_dir / GLOBAL_SPARSE)
     meta = json.loads((chunk / "meta.json").read_text())
     halo = float(meta.get("overlap_m", 40.0) if halo_m is None else halo_m)
@@ -319,8 +371,8 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
                     "--boundary", _bbox(meta, halo)], check=True)
 
     rec = pycolmap.Reconstruction(str(final))
+    keep = _select_cameras(rec, meta, halo, rule)
     if rule != "crop":
-        keep = _select_cameras(rec, meta, halo, rule)
         dropped = [i for i in list(rec.images.keys()) if i not in keep]
         for iid in dropped:
             rec.deregister_image(iid)
@@ -330,6 +382,14 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
         print(f"[global] {chunk.name}: rule={rule} kept {len(keep)} of "
               f"{len(keep) + len(dropped)} cameras", flush=True)
         rec = pycolmap.Reconstruction(str(final))
+    if points != "box":
+        boxed = rec.num_points3D()
+        _keep_seen_points(model, final, {rec.images[i].name for i in keep})
+        if points == "retri":
+            _retriangulate(frames_dir, final)
+        rec = pycolmap.Reconstruction(str(final))
+        print(f"[global] {chunk.name}: points={points} {boxed} in the box -> "
+              f"{rec.num_points3D()} kept", flush=True)
     if refine and rec.num_reg_images() >= 2:
         r = refine_chunk(final)
         print(f"[global] {chunk.name}: local BA, reprojection RMS "
@@ -339,8 +399,9 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
         rec = pycolmap.Reconstruction(str(final))
     names = {im.name for im in rec.images.values()}
     added = _relink(frames_dir, chunk, names)
-    stats = {"chunk": chunk.name, "rule": rule, "images": rec.num_reg_images(),
-             "points": rec.num_points3D(), "linked": added, "refined": bool(refine)}
+    stats = {"chunk": chunk.name, "rule": rule, "points_rule": points,
+             "images": rec.num_reg_images(), "points": rec.num_points3D(),
+             "linked": added, "refined": bool(refine)}
     if stats["images"] < 2:
         # Not a warning. A chunk with nothing in it trains into an empty tile
         # and merges into a hole in the world, silently.
@@ -359,7 +420,7 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
 def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
               refine: bool = False, halo_m: float | None = None,
               global_sparse: Path | None = None,
-              only: list[str] | None = None) -> list[dict]:
+              only: list[str] | None = None, points: str = "box") -> list[dict]:
     """Cut every chunk out of the global model; park cells that the solve
     emptied by putting their GPS-dealt frames elsewhere; refuse on a hole.
 
@@ -376,7 +437,7 @@ def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
         raise SystemExit(f"[global] no chunks under {chunks_dir}"
                          + (f" matching {only}" if only else ""))
     rows = [split_chunk(frames_dir, c, halo_m=halo_m, global_sparse=global_sparse,
-                        rule=rule, refine=refine) for c in chunks]
+                        rule=rule, refine=refine, points=points) for c in chunks]
     print(f"[global] split {len(rows)} chunks; "
           f"{sum(r['images'] for r in rows)} image memberships, "
           f"{sum(r['linked'] for r in rows)} new links", flush=True)

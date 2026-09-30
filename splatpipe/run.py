@@ -269,7 +269,8 @@ def run(capture: Path, out: Path, role: str, config: str | None,
                      mapper=pcfg.get("mapper", "auto"),
                      loop_closure=pcfg.get("loop_closure", "none"))
         split_all(frames, chunks, rule=pcfg.get("rule", "inria"),
-                  refine=bool(pcfg.get("refine", False)))
+                  refine=bool(pcfg.get("refine", False)),
+                  points=str(pcfg.get("points", "box")))
         # The seam check passes by construction on a global-first world (the
         # chunks share one model: entry 4.1), so it is reported, never a bar.
         # The bar that matters was solve_global's coverage, already applied.
