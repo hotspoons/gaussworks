@@ -11,7 +11,9 @@ leaves a blurry blob along the whole driven path.
 
 We patch `Parser.__init__` to populate `mask_dict` from `<chunk>/masks/<cam>/`
 and then hand argv straight to `simple_trainer`, so we inherit its CLI and stay
-out of its way.
+out of its way. Two more patches ride along, and they apply whether or not a
+chunk has masks: the held-out split is decided by frame number (holdout.py),
+and the scene scale can be pinned in metres (SPLATPIPE_SCENE_SCALE_M).
 """
 
 import os
@@ -62,6 +64,59 @@ def _install_loader_patch():
           flush=True)
 
 
+def _install_split_patch(examples: Path):
+    """Hold views out by frame number, not by list index (see holdout.py)."""
+    sys.path.insert(0, str(examples))
+    import datasets.colmap as colmap_ds            # noqa: PLC0415
+
+    from .holdout import is_holdout                # noqa: PLC0415
+
+    original = colmap_ds.Dataset.__init__
+
+    def patched(self, parser, split="train", *args, **kwargs):
+        original(self, parser, split, *args, **kwargs)
+        names = list(parser.image_names)
+        every = int(getattr(parser, "test_every", 8))
+        held = np.array([is_holdout(n, i, every) for i, n in enumerate(names)])
+        self.indices = np.flatnonzero(held if split != "train" else ~held)
+        print(f"[masked] {split}: {len(self.indices)} views, held out by frame "
+              f"number (every {every})", flush=True)
+
+    colmap_ds.Dataset.__init__ = patched
+
+
+def _install_scene_scale_patch(examples: Path):
+    """Pin the scene scale to a distance in METRES, the same for every tile.
+
+    gsplat derives scene_scale from how far the cameras spread, and it drives
+    the densification thresholds (grow/prune are fractions of it) and the
+    position learning rate. So a tile whose cameras reach a long way down the
+    road densifies COARSER than a tile with only local cameras: measured on
+    gosheff, the same cell trained at scene scale 337 m grew 155k gaussians
+    and at 119 m grew 1.08M, from the same images and the same steps. The
+    trainer's "quality" was tracking camera spread, not the scene. A world is
+    built from tiles of one physical size, so that is the scale to pin.
+    """
+    want = os.environ.get("SPLATPIPE_SCENE_SCALE_M")
+    if not want:
+        return
+    sys.path.insert(0, str(examples))
+    import datasets.colmap as colmap_ds            # noqa: PLC0415
+
+    original = colmap_ds.Parser.__init__
+
+    def patched(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        # simple_trainer multiplies by 1.1; pre-divide so the number it prints
+        # and uses is the one asked for
+        measured = float(self.scene_scale)
+        self.scene_scale = float(want) / 1.1
+        print(f"[masked] scene scale pinned to {float(want):.0f} m "
+              f"(cameras alone would have given {measured * 1.1:.0f} m)", flush=True)
+
+    colmap_ds.Parser.__init__ = patched
+
+
 def _install_mask_patch(examples: Path):
     sys.path.insert(0, str(examples))
     import datasets.colmap as colmap_ds            # noqa: PLC0415
@@ -73,6 +128,7 @@ def _install_mask_patch(examples: Path):
         data_dir = Path(getattr(self, "data_dir", kwargs.get("data_dir", "")))
         masks_root = data_dir / "masks"
         if not masks_root.is_dir():
+            print("[masked] no masks/ in the chunk; training unmasked", flush=True)
             return
         # camera_id -> camera folder, recovered from the image paths COLMAP
         # recorded (single_camera_per_folder means one id per camN directory)
@@ -110,6 +166,8 @@ def _install_mask_patch(examples: Path):
 def main():
     examples = Path(sys.argv[1])
     _install_loader_patch()
+    _install_split_patch(examples)
+    _install_scene_scale_patch(examples)
     _install_mask_patch(examples)
     sys.argv = [str(examples / "simple_trainer.py"), *sys.argv[2:]]
     runpy.run_path(str(examples / "simple_trainer.py"), run_name="__main__")

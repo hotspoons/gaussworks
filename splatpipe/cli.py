@@ -2,6 +2,7 @@
 """splatpipe CLI: ingest -> chunk -> poses -> train."""
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -169,6 +170,9 @@ def main():
                         "model_cropper returned; cell = only cameras inside the "
                         "cell+halo; inria = inside, or within 2x the cell and "
                         "seeing 50+ points in it (hierarchical-3DGS's rule)")
+    s.add_argument("--refine", action="store_true",
+                   help="bundle-adjust each cut model locally (extrinsics + points, "
+                        "intrinsics fixed), as hierarchical-3DGS does after its cut")
 
     s = sub.add_parser(parents=[common], name="train", help="per-chunk gsplat training, fanned out over the work queue")
     s.add_argument("--chunks", required=True, type=Path)
@@ -179,6 +183,11 @@ def main():
                         "mcmc (relocation up to --strategy.cap-max gaussians)")
     s.add_argument("--tag", help="write to splat_<tag>/ with its own queue stage, "
                                  "so experiments sit beside the baseline run")
+    s.add_argument("--scene-scale-m", type=float,
+                   help="pin gsplat's scene scale to this many metres for every tile "
+                        "(default: the config's train.scene_scale_m, else gsplat "
+                        "derives it from camera spread, which makes densification "
+                        "depend on how far a tile's cameras reach)")
     s.add_argument("extra", nargs="*", help="extra flags passed to the trainer")
 
     s = sub.add_parser(parents=[common], name="verify", help="eyeball a new camera/format: EAC layout, GPS, views")
@@ -192,6 +201,10 @@ def main():
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("ckpts", nargs="+", type=Path)
     s.add_argument("--test-every", type=int, default=8)
+    s.add_argument("--names", type=Path,
+                   help="score only held-out views named in this file (one image "
+                        "name per line): the shared held-out set of the variants "
+                        "being compared, see holdout.common_holdout")
     s.add_argument("--at-width", type=int,
                    help="render and score at this width instead of the training width. "
                         "Required to compare models trained at different resolutions: at "
@@ -419,20 +432,43 @@ def main():
         chunks = list_chunks(args.chunks)
         if not chunks:
             raise SystemExit(f"[global] no chunks under {args.chunks}")
+        from .globalsfm import relocated_frames
         rows = [split_chunk(args.frames, c, halo_m=args.halo_m,
-                            global_sparse=args.sparse, rule=args.rule)
+                            global_sparse=args.sparse, rule=args.rule,
+                            refine=args.refine)
                 for c in chunks]
         empty = [r["chunk"] for r in rows if r["images"] < 2]
         print(f"[global] split {len(rows)} chunks; "
               f"{sum(r['images'] for r in rows)} image memberships, "
               f"{sum(r['linked'] for r in rows)} new links")
-        if empty:
-            raise SystemExit(f"[global] {len(empty)} chunk(s) came out empty: {empty}")
+        holes = []
+        for name in empty:
+            chunk = args.chunks / name
+            dealt, registered = relocated_frames(args.frames, chunk, args.sparse)
+            if dealt and registered >= 0.9 * dealt:
+                # the GPS dealt these frames to a cell the solve says they are
+                # not in; the model has them, in the neighbours' cuts
+                parked = args.chunks / "relocated" / name
+                parked.parent.mkdir(exist_ok=True)
+                if parked.exists():
+                    shutil.rmtree(parked)
+                shutil.move(str(chunk), str(parked))
+                print(f"[global] {name}: empty because its {dealt} frames are "
+                      f"registered elsewhere ({registered} in the global model): "
+                      f"a GPS-dealt cell, not a hole. Parked at {parked}")
+            else:
+                holes.append((name, dealt, registered))
+        if holes:
+            raise SystemExit(f"[global] {len(holes)} chunk(s) came out empty with "
+                             f"frames the global model never registered: {holes}")
 
     elif args.cmd == "train":
         from .train import train_all
+        tcfg = _cfg(args.config, "train")
         train_all(args.chunks, steps=args.steps, extra=args.extra, only=args.only,
-                  preset=args.preset, tag=args.tag)
+                  preset=args.preset, tag=args.tag,
+                  scene_scale_m=(args.scene_scale_m if args.scene_scale_m is not None
+                                 else tcfg.get("scene_scale_m")))
 
     elif args.cmd == "verify":
         from .verify import verify
@@ -441,7 +477,8 @@ def main():
 
     elif args.cmd == "eval":
         from .evaluate import evaluate
-        evaluate(args.chunk, args.ckpts, test_every=args.test_every, at_width=args.at_width)
+        evaluate(args.chunk, args.ckpts, test_every=args.test_every, at_width=args.at_width,
+                 names=args.names)
 
     elif args.cmd == "run":
         from .run import run

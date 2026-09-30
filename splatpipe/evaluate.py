@@ -18,12 +18,22 @@ from pathlib import Path
 import numpy as np
 
 
-def _val_indices(n: int, test_every: int = 8) -> list[int]:
-    return list(range(0, n, test_every))
+def _val_indices(names: list[str], test_every: int = 8,
+                 only: set[str] | None = None) -> list[int]:
+    """Held out by frame number (holdout.py), so the same physical frames are
+    scored whichever image subset a chunk was cut with. `only` narrows that to
+    a shared list -- the intersection of two variants' held-out frames is the
+    only set on which their PSNRs can be compared."""
+    from .holdout import is_holdout                # noqa: PLC0415
+    idx = [i for i, n in enumerate(names) if is_holdout(n, i, test_every)]
+    if only is not None:
+        idx = [i for i in idx if names[i] in only]
+    return idx
 
 
 def evaluate(chunk: Path, ckpts: list[Path], examples: Path | None = None,
-             test_every: int = 8, at_width: int | None = None) -> dict:
+             test_every: int = 8, at_width: int | None = None,
+             names: Path | None = None) -> dict:
     import cv2                                     # noqa: PLC0415
     import torch                                   # noqa: PLC0415
     from gsplat import rasterization               # noqa: PLC0415
@@ -32,7 +42,15 @@ def evaluate(chunk: Path, ckpts: list[Path], examples: Path | None = None,
 
     chunk = Path(chunk)
     parser = _load_parser(chunk)
-    idx = _val_indices(len(parser.image_paths), test_every)
+    only = None
+    if names is not None:
+        only = {ln.strip() for ln in Path(names).read_text().splitlines() if ln.strip()}
+    idx = _val_indices(list(parser.image_names), test_every, only)
+    if not idx:
+        raise SystemExit(f"[eval] {chunk.name}: no held-out views"
+                         + (f" in common with {names}" if names else ""))
+    print(f"[eval] {chunk.name}: {len(idx)} held-out views"
+          + (f" (shared list {Path(names).name})" if names else ""), flush=True)
 
     masks = {}
     for cam_id, path in zip(parser.camera_ids, parser.image_paths):

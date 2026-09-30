@@ -74,7 +74,8 @@ def _ensure_point_colours(chunk: Path) -> None:
 
 
 def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str],
-                preset: str = "default", tag: str | None = None):
+                preset: str = "default", tag: str | None = None,
+                scene_scale_m: float | None = None):
     # `tag` keeps experiments side by side: splat_<tag>/ next to splat/, and
     # its own queue stage, so "one change at a time" comparisons never
     # overwrite the run they are being compared against
@@ -85,11 +86,11 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str],
     _ensure_point_colours(chunk)
     env = dict(os.environ)
     env.setdefault("CUDA_VISIBLE_DEVICES", os.environ.get("LOCAL_RANK", "0"))
-    # route through our wrapper when masks exist, so the rig is excluded from
-    # the loss instead of being fitted as phantom geometry
-    masked = (chunk / "masks").is_dir()
-    entry = (["-m", "splatpipe.gsplat_masked", str(examples)]
-             if masked else [str(examples / "simple_trainer.py")])
+    if scene_scale_m:
+        env["SPLATPIPE_SCENE_SCALE_M"] = str(float(scene_scale_m))
+    # always through our wrapper: it excludes the rig from the loss when masks
+    # exist, and holds views out by frame number either way (holdout.py)
+    entry = ["-m", "splatpipe.gsplat_masked", str(examples)]
     cmd = [sys.executable, *entry, preset,
            "--data-dir", str(chunk), "--data-factor", "1",
            "--result-dir", str(result), "--max-steps", str(steps),
@@ -106,7 +107,7 @@ def train_chunk(chunk: Path, examples: Path, steps: int, extra: list[str],
 
 def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = None,
               only: list[str] | None = None, preset: str = "default",
-              tag: str | None = None):
+              tag: str | None = None, scene_scale_m: float | None = None):
     examples = Path(os.environ.get("GSPLAT_EXAMPLES", "/opt/gsplat/examples"))
     if not (examples / "simple_trainer.py").exists():
         raise SystemExit(f"gsplat examples not found at {examples} (set GSPLAT_EXAMPLES)")
@@ -116,9 +117,11 @@ def train_all(chunks_dir: Path, steps: int = 30000, extra: list[str] | None = No
         print(f"[train] --only {only}: {len(ready)} chunk(s)")
     q = WorkQueue(chunks_dir, f"train_{tag}" if tag else "train")
     print(f"[train] worker {q.worker}: {len(ready)} posed chunk(s) in the pool"
-          + (f" (preset {preset}, tag {tag})" if tag or preset != "default" else ""))
+          + (f" (preset {preset}, tag {tag})" if tag or preset != "default" else "")
+          + (f" scene scale {scene_scale_m:.0f} m" if scene_scale_m else ""))
     done, failed = q.run(ready, lambda c: train_chunk(c, examples, steps, extra or [],
-                                                      preset=preset, tag=tag))
+                                                      preset=preset, tag=tag,
+                                                      scene_scale_m=scene_scale_m))
     print(f"[train] worker {q.worker}: trained {len(done)}, failed {len(failed)}")
     if failed:
         raise SystemExit(f"[train] failed chunks: {failed}")

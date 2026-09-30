@@ -202,8 +202,58 @@ def _select_cameras(rec, meta: dict, halo_m: float, rule: str) -> set[int]:
     return keep
 
 
+def refine_chunk(final: Path) -> tuple[float, float]:
+    """Bundle-adjust the cut model locally, the step hierarchical-3DGS takes
+    after ITS cut and the one this module left out.
+
+    The global solve decides where every camera is to within its own
+    tolerance -- one bundle adjustment over 30k images, three passes. A tile
+    trains against those poses as given. Refining the cut model lets the
+    ~1-2k cameras of one cell settle against the points they actually see,
+    the way a partition-first chunk's final BA did. Intrinsics stay fixed:
+    the virtual pinholes are exact by construction (SEAM.md), and letting
+    each cell re-estimate them is how neighbours start to disagree again.
+
+    Returns (reprojection error before, after) in pixels.
+    """
+    import pycolmap                              # noqa: PLC0415
+
+    before = pycolmap.Reconstruction(str(final)).compute_mean_reprojection_error()
+    subprocess.run(["colmap", "bundle_adjuster",
+                    "--input_path", str(final), "--output_path", str(final),
+                    "--BundleAdjustment.refine_focal_length", "0",
+                    "--BundleAdjustment.refine_principal_point", "0",
+                    "--BundleAdjustment.refine_extra_params", "0",
+                    "--BundleAdjustment.refine_extrinsics", "1",
+                    "--BundleAdjustment.max_num_iterations", "50"], check=True)
+    after = pycolmap.Reconstruction(str(final)).compute_mean_reprojection_error()
+    return before, after
+
+
+def relocated_frames(frames_dir: Path, chunk: Path,
+                     global_sparse: Path | None = None) -> tuple[int, int]:
+    """(frames this cell was dealt by GPS, how many the global model registered).
+
+    A cell can come out of the cut empty for two reasons that need opposite
+    responses. If its frames are not in the global model at all, the solve
+    has a hole and the world would too: stop. If they ARE registered -- just
+    not inside this cell -- then the GPS that dealt them here was wrong and
+    the model corrected it (the first 45 s of arrowhead sit 200 m from their
+    cold-start fix), so the cell was never real: drop it and carry on.
+    """
+    import pycolmap                              # noqa: PLC0415
+
+    listed = chunk / "geo_enu.txt"
+    names = [ln.split()[0] for ln in listed.read_text().splitlines() if ln.strip()] \
+        if listed.exists() else []
+    rec = pycolmap.Reconstruction(str(global_sparse or (frames_dir / GLOBAL_SPARSE)))
+    have = {im.name for im in rec.images.values()}
+    return len(names), sum(1 for n in names if n in have)
+
+
 def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
-                global_sparse: Path | None = None, rule: str = "crop") -> dict:
+                global_sparse: Path | None = None, rule: str = "crop",
+                refine: bool = False) -> dict:
     """Cut one chunk's sub-model out of the global reconstruction."""
     import pycolmap                              # noqa: PLC0415
 
@@ -231,10 +281,15 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
         print(f"[global] {chunk.name}: rule={rule} kept {len(keep)} of "
               f"{len(keep) + len(dropped)} cameras", flush=True)
         rec = pycolmap.Reconstruction(str(final))
+    if refine and rec.num_reg_images() >= 2:
+        before, after = refine_chunk(final)
+        print(f"[global] {chunk.name}: local BA, reprojection "
+              f"{before:.3f} -> {after:.3f} px", flush=True)
+        rec = pycolmap.Reconstruction(str(final))
     names = {im.name for im in rec.images.values()}
     added = _relink(frames_dir, chunk, names)
     stats = {"chunk": chunk.name, "rule": rule, "images": rec.num_reg_images(),
-             "points": rec.num_points3D(), "linked": added}
+             "points": rec.num_points3D(), "linked": added, "refined": bool(refine)}
     if stats["images"] < 2:
         # Not a warning. A chunk with nothing in it trains into an empty tile
         # and merges into a hole in the world, silently.
