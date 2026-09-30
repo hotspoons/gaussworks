@@ -478,7 +478,8 @@ def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
 
 def refine_with_priors(frames_dir: Path, out: Path | None = None,
                        sigma_xy_m: float = 12.0, sigma_z_m: float = 20.0,
-                       max_iterations: int = 40, threads: int = 0) -> Path:
+                       max_iterations: int = 40, threads: int = 0,
+                       model: Path | None = None, passes: str = "pull,robust") -> Path:
     """Bundle-adjust the global model with GPS as a WEAK position prior.
 
     Why this exists. A whole-capture solve with no GPS in the loop is locally
@@ -499,13 +500,21 @@ def refine_with_priors(frames_dir: Path, out: Path | None = None,
     canopy here (DOP up to 19: 12 m horizontal, worse vertically), and the
     loss is robust so the cold-start fixes pull nothing.
 
+    Two passes, and the order matters. A robust loss on the priors is right
+    for garbage fixes and WRONG for large drift: on the neighbourhood the
+    priors sat 10-30 sigma from the solve, which is exactly what a robust
+    loss is built to ignore, and 41 iterations moved the p90 residual from
+    139 m to 129 m. So `pull` first -- plain least squares, every prior at
+    full weight, which is what drags a 350 m spur back onto the map -- then
+    `robust`, which lets the fixes that really are wrong go again.
+
     Intrinsics stay fixed (exact virtual pinholes). Output goes beside the
     input, never over it, so the two can be compared.
     """
     import numpy as np                           # noqa: PLC0415
     import pycolmap                              # noqa: PLC0415
 
-    model = frames_dir / GLOBAL_SPARSE
+    model = model or (frames_dir / GLOBAL_SPARSE)
     out = out or (frames_dir / "sparse" / "prior")
     rec = pycolmap.Reconstruction(str(model))
     enu = {}
@@ -534,18 +543,22 @@ def refine_with_priors(frames_dir: Path, out: Path | None = None,
     opts.print_summary = True
     opts.solver_options.max_num_iterations = int(max_iterations)
     opts.solver_options.num_threads = int(threads) if threads else max(1, (os.cpu_count() or 2) - 2)
-    popts = pycolmap.PosePriorBundleAdjustmentOptions()
-    popts.use_robust_loss_on_prior_position = True
-    popts.ransac_max_error = 0.0          # already in ENU; do not re-align
     config = pycolmap.BundleAdjustmentConfig()
     for iid in rec.images:
         config.add_image(iid)
-    ba = pycolmap.create_pose_prior_bundle_adjuster(opts, popts, config, priors, rec)
-    ba.solve()
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
-    rec.write(str(out))
+    for name in [p.strip() for p in passes.split(",") if p.strip()]:
+        popts = pycolmap.PosePriorBundleAdjustmentOptions()
+        popts.use_robust_loss_on_prior_position = (name == "robust")
+        popts.ransac_max_error = 0.0          # already in ENU; do not re-align
+        ba = pycolmap.create_pose_prior_bundle_adjuster(opts, popts, config, priors, rec)
+        ba.solve()
+        step = _prior_residual(rec, enu)
+        print(f"[global] pass {name}: |solve - GPS| median {step[0]:.1f} m, "
+              f"p90 {step[1]:.1f} m, max {step[2]:.1f} m", flush=True)
+        if out.exists():
+            shutil.rmtree(out)
+        out.mkdir(parents=True)
+        rec.write(str(out))       # after every pass: a killed job still leaves the last one
     after = _prior_residual(rec, enu)
     print(f"[global] |solve - GPS| median {before[0]:.1f} -> {after[0]:.1f} m, "
           f"p90 {before[1]:.1f} -> {after[1]:.1f} m, max {before[2]:.1f} -> {after[2]:.1f} m; "

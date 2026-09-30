@@ -165,7 +165,11 @@ def main():
     s.add_argument("--out", type=Path, help="default: <frames>/sparse/prior")
     s.add_argument("--sigma-xy-m", type=float, default=12.0, help="GPS horizontal error")
     s.add_argument("--sigma-z-m", type=float, default=20.0, help="GPS vertical error")
-    s.add_argument("--max-iterations", type=int, default=40)
+    s.add_argument("--max-iterations", type=int, default=40, help="per pass")
+    s.add_argument("--passes", default="pull,robust",
+                   help="comma list of pull (plain least squares on the priors) and "
+                        "robust; pull first, or large drift is treated as outliers")
+    s.add_argument("--model", type=Path, help="start from this model instead of sparse/0")
 
     s = sub.add_parser(parents=[common], name="global-split",
                        help="cut a global reconstruction into the existing chunks")
@@ -442,7 +446,8 @@ def main():
     elif args.cmd == "global-refine":
         from .globalsfm import refine_with_priors
         refine_with_priors(args.frames, out=args.out, sigma_xy_m=args.sigma_xy_m,
-                           sigma_z_m=args.sigma_z_m, max_iterations=args.max_iterations)
+                           sigma_z_m=args.sigma_z_m, max_iterations=args.max_iterations,
+                           model=args.model, passes=args.passes)
 
     elif args.cmd == "global-split":
         from .globalsfm import split_all
