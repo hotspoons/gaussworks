@@ -358,14 +358,23 @@ def split_chunk(frames_dir: Path, chunk: Path, halo_m: float | None = None,
 
 def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
               refine: bool = False, halo_m: float | None = None,
-              global_sparse: Path | None = None) -> list[dict]:
+              global_sparse: Path | None = None,
+              only: list[str] | None = None) -> list[dict]:
     """Cut every chunk out of the global model; park cells that the solve
-    emptied by putting their GPS-dealt frames elsewhere; refuse on a hole."""
+    emptied by putting their GPS-dealt frames elsewhere; refuse on a hole.
+
+    `only` narrows to chunks whose name contains one of the substrings, so a
+    49-cell split with --refine (minutes of BA per cell) can be fanned out
+    over processes; each invocation is independent of the others.
+    """
     from .poses import list_chunks                # noqa: PLC0415
 
     chunks = list_chunks(chunks_dir)
+    if only:
+        chunks = [c for c in chunks if any(o in c.name for o in only)]
     if not chunks:
-        raise SystemExit(f"[global] no chunks under {chunks_dir}")
+        raise SystemExit(f"[global] no chunks under {chunks_dir}"
+                         + (f" matching {only}" if only else ""))
     rows = [split_chunk(frames_dir, c, halo_m=halo_m, global_sparse=global_sparse,
                         rule=rule, refine=refine) for c in chunks]
     print(f"[global] split {len(rows)} chunks; "
