@@ -480,7 +480,8 @@ def split_all(frames_dir: Path, chunks_dir: Path, rule: str = "crop",
 def refine_with_priors(frames_dir: Path, out: Path | None = None,
                        sigma_xy_m: float = 12.0, sigma_z_m: float = 20.0,
                        max_iterations: int = 40, threads: int = 0,
-                       model: Path | None = None, passes: str = "pull,robust") -> Path:
+                       model: Path | None = None, passes: str = "pull,robust",
+                       filter_px: float = 0.0) -> Path:
     """Bundle-adjust the global model with GPS as a WEAK position prior.
 
     Why this exists. A whole-capture solve with no GPS in the loop is locally
@@ -509,6 +510,15 @@ def refine_with_priors(frames_dir: Path, out: Path | None = None,
     full weight, which is what drags a 350 m spur back onto the map -- then
     `robust`, which lets the fixes that really are wrong go again.
 
+    `filter_px` drops observations that reproject worse than this before the
+    first pass, and any point left with fewer than two. After a warp the
+    tracks that span a stretch with strong strain are torn -- on the
+    neighbourhood 19% of observations sat over 10 px and 1.3% over 100 px --
+    and plain least squares spends its iterations on those instead of on
+    the 81% that are nearly right (RMS 3.4 px). COLMAP's point_filtering
+    does it in C++; the per-chunk cut can re-triangulate from the database
+    afterwards (`--points retri`) to get the density back.
+
     Intrinsics stay fixed (exact virtual pinholes). Output goes beside the
     input, never over it, so the two can be compared.
     """
@@ -517,6 +527,20 @@ def refine_with_priors(frames_dir: Path, out: Path | None = None,
 
     model = model or (frames_dir / GLOBAL_SPARSE)
     out = out or (frames_dir / "sparse" / "prior")
+    if filter_px and filter_px > 0:
+        n0 = pycolmap.Reconstruction(str(model)).num_points3D()
+        filtered = out.parent / (out.name + ".filtered")
+        if filtered.exists():
+            shutil.rmtree(filtered)
+        filtered.mkdir(parents=True)
+        subprocess.run(["colmap", "point_filtering",
+                        "--input_path", str(model), "--output_path", str(filtered),
+                        "--max_reproj_error", str(float(filter_px)),
+                        "--min_tri_angle", "0", "--min_track_len", "2"], check=True)
+        model = filtered
+        print(f"[global] filtered observations over {filter_px:.0f} px: "
+              f"{n0:,} -> {pycolmap.Reconstruction(str(model)).num_points3D():,} points",
+              flush=True)
     rec = pycolmap.Reconstruction(str(model))
     enu = {}
     for ln in (frames_dir / "geo_enu.txt").read_text().splitlines():

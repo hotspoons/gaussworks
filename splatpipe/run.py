@@ -279,7 +279,9 @@ def run(capture: Path, out: Path, role: str, config: str | None,
             warped = warp_to_priors(frames, window=int(pcfg.get("warp_window", 100)))
             cut_from = refine_with_priors(frames, model=warped,
                                           sigma_xy_m=float(pcfg.get("prior_sigma_xy_m", 12.0)),
-                                          sigma_z_m=float(pcfg.get("prior_sigma_z_m", 20.0)))
+                                          sigma_z_m=float(pcfg.get("prior_sigma_z_m", 20.0)),
+                                          filter_px=float(pcfg.get("warp_filter_px", 10.0)),
+                                          max_iterations=int(pcfg.get("prior_iterations", 150)))
         split_all(frames, chunks, rule=pcfg.get("rule", "inria"),
                   refine=bool(pcfg.get("refine", False)),
                   points=str(pcfg.get("points", "seen")), global_sparse=cut_from)

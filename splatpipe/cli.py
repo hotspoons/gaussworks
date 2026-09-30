@@ -170,6 +170,9 @@ def main():
                    help="comma list of pull (plain least squares on the priors) and "
                         "robust; pull first, or large drift is treated as outliers")
     s.add_argument("--model", type=Path, help="start from this model instead of sparse/0")
+    s.add_argument("--filter-px", type=float, default=0.0,
+                   help="drop observations reprojecting worse than this first (after a "
+                        "warp: 10); 0 keeps everything")
 
     s = sub.add_parser(parents=[common], name="global-warp",
                        help="bend the global model onto the GPS track with a windowed "
@@ -455,7 +458,7 @@ def main():
         from .globalsfm import refine_with_priors
         refine_with_priors(args.frames, out=args.out, sigma_xy_m=args.sigma_xy_m,
                            sigma_z_m=args.sigma_z_m, max_iterations=args.max_iterations,
-                           model=args.model, passes=args.passes)
+                           model=args.model, passes=args.passes, filter_px=args.filter_px)
 
     elif args.cmd == "global-warp":
         from .globalsfm import warp_to_priors
