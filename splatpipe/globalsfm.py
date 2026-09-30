@@ -31,6 +31,7 @@ are the redundant ones.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -572,3 +573,113 @@ def _prior_residual(rec, enu: dict) -> tuple[float, float, float]:
     d = np.array([np.linalg.norm(np.asarray(im.projection_center())[:2] - enu[im.name][:2])
                   for im in rec.images.values() if im.name in enu])
     return (float(np.median(d)), float(np.percentile(d, 90)), float(d.max())) if len(d) else (0., 0., 0.)
+
+
+def warp_to_priors(frames_dir: Path, out: Path | None = None,
+                   model: Path | None = None, window: int = 100) -> Path:
+    """Bend the global model onto the GPS track with a SMOOTH, windowed
+    similarity, as a starting point for `refine_with_priors`.
+
+    Bundle adjustment is a local method. From 350 m away it crawls: the
+    direction that stretches a drifted spur back to length is nearly free in
+    the image cost (that is why it drifted), but a trust-region step takes it
+    a metre at a time. So first warp: for every frame, fit a 2-D similarity
+    (yaw, scale, shift) plus a height shift from solve centres to GPS over
+    the `window` positions either side of it, and move that frame's cameras
+    by it. Points move by the mean of the transforms of the frames that see
+    them. Over a window of 100 positions (~175 m) the transform is nearly
+    constant, so local geometry survives; what changes is the low-frequency
+    shape, which is the only thing that was wrong. Then BA reconciles.
+
+    Yaw only, never tilt: GPS altitude is the noisiest axis (20 m), and a
+    3-D fit over a window would happily tip the road to follow that noise.
+    """
+    import numpy as np                           # noqa: PLC0415
+    import pycolmap                              # noqa: PLC0415
+
+    model = model or (frames_dir / GLOBAL_SPARSE)
+    out = out or (frames_dir / "sparse" / "warp")
+    rec = pycolmap.Reconstruction(str(model))
+    enu = {}
+    for ln in (frames_dir / "geo_enu.txt").read_text().splitlines():
+        parts = ln.split()
+        if len(parts) >= 4:
+            enu[parts[0]] = np.array([float(parts[1]), float(parts[2]), float(parts[3])])
+    before = _prior_residual(rec, enu)
+
+    def frame_of(name: str) -> int | None:
+        m = re.search(r"(\d+)(?!.*\d)", Path(name).stem)
+        return int(m.group(1)) if m else None
+
+    # one position per frame: the mean of its rig's camera centres, and its fix
+    by_frame: dict[int, list] = {}
+    img_frame: dict[int, int] = {}
+    for iid, im in rec.images.items():
+        f = frame_of(im.name)
+        if f is None or im.name not in enu:
+            continue
+        img_frame[iid] = f
+        by_frame.setdefault(f, []).append((np.asarray(im.projection_center()), enu[im.name]))
+    frames = np.array(sorted(by_frame))
+    S = np.array([np.mean([c for c, _ in by_frame[f]], axis=0) for f in frames])
+    G = np.array([np.mean([g for _, g in by_frame[f]], axis=0) for f in frames])
+
+    def fit(lo: int, hi: int):
+        """2-D similarity s*R(yaw)*x + t from solve to GPS over frames[lo:hi], plus dz."""
+        a, b = S[lo:hi, :2], G[lo:hi, :2]
+        ma, mb = a.mean(0), b.mean(0)
+        A, B = a - ma, b - mb
+        H = A.T @ B
+        U, sv, Vt = np.linalg.svd(H)
+        d = np.sign(np.linalg.det(Vt.T @ U.T))
+        R = Vt.T @ np.diag([1, d]) @ U.T
+        s = (sv * [1, d]).sum() / max((A ** 2).sum(), 1e-9)
+        t = mb - s * R @ ma
+        dz = float(np.median(G[lo:hi, 2] - s * S[lo:hi, 2]))
+        return s, R, t, dz
+
+    xf = []
+    n = len(frames)
+    for i in range(n):
+        lo, hi = max(0, i - window), min(n, i + window + 1)
+        xf.append(fit(lo, hi))
+    xf_by_frame = {int(f): x for f, x in zip(frames, xf)}
+
+    def apply(x, p):
+        s, R, t, dz = x
+        q = np.empty(3)
+        q[:2] = s * R @ p[:2] + t
+        q[2] = s * p[2] + dz
+        return q
+
+    # cameras: new centre, yaw folded into the orientation
+    for iid, im in rec.images.items():
+        f = img_frame.get(iid)
+        if f is None:
+            continue
+        s, R2, t, dz = xf_by_frame[f]
+        yaw = np.arctan2(R2[1, 0], R2[0, 0])
+        Rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+        c_new = apply(xf_by_frame[f], np.asarray(im.projection_center()))
+        R_cw = im.cam_from_world.rotation.matrix() @ Rz.T
+        im.cam_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d(R_cw), -R_cw @ c_new)
+    # points: mean of the transforms of the frames that observe them
+    for pid, pt in rec.points3D.items():
+        acc = np.zeros(3); k = 0
+        for el in pt.track.elements:
+            f = img_frame.get(el.image_id)
+            if f is None:
+                continue
+            acc += apply(xf_by_frame[f], pt.xyz); k += 1
+        if k:
+            pt.xyz = acc / k
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    rec.write(str(out))
+    after = _prior_residual(rec, enu)
+    scales = np.array([x[0] for x in xf])
+    print(f"[global] warp over {n:,} frames, window ±{window}: scale {scales.min():.2f}..{scales.max():.2f}; "
+          f"|solve - GPS| median {before[0]:.1f} -> {after[0]:.1f} m, p90 {before[1]:.1f} -> {after[1]:.1f} m, "
+          f"max {before[2]:.1f} -> {after[2]:.1f} m; model written to {out}", flush=True)
+    return out

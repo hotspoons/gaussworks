@@ -171,6 +171,14 @@ def main():
                         "robust; pull first, or large drift is treated as outliers")
     s.add_argument("--model", type=Path, help="start from this model instead of sparse/0")
 
+    s = sub.add_parser(parents=[common], name="global-warp",
+                       help="bend the global model onto the GPS track with a windowed "
+                            "similarity, as a start for global-refine when the drift is large")
+    s.add_argument("--frames", required=True, type=Path)
+    s.add_argument("--out", type=Path, help="default: <frames>/sparse/warp")
+    s.add_argument("--model", type=Path, help="default: <frames>/sparse/0")
+    s.add_argument("--window", type=int, default=100, help="positions either side")
+
     s = sub.add_parser(parents=[common], name="global-split",
                        help="cut a global reconstruction into the existing chunks")
     s.add_argument("--frames", required=True, type=Path)
@@ -448,6 +456,10 @@ def main():
         refine_with_priors(args.frames, out=args.out, sigma_xy_m=args.sigma_xy_m,
                            sigma_z_m=args.sigma_z_m, max_iterations=args.max_iterations,
                            model=args.model, passes=args.passes)
+
+    elif args.cmd == "global-warp":
+        from .globalsfm import warp_to_priors
+        warp_to_priors(args.frames, out=args.out, model=args.model, window=args.window)
 
     elif args.cmd == "global-split":
         from .globalsfm import split_all
