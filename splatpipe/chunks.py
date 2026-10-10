@@ -13,7 +13,7 @@ neighbouring chunks share observations and align cleanly when merged.
 Output per chunk (a self-contained COLMAP workspace):
     images/camN/*.jpg   symlinks into the ingest output
     geo.txt             GPS priors for this chunk's images
-    corridor.json       observed envelope (see corridor.py)
+    envelope.json       observed envelope (see corridor.py)
     meta.json           cell bounds, centre, frame/pass counts
 """
 
@@ -75,8 +75,8 @@ def _write_chunk(frames_dir: Path, chunk_dir: Path, members: list[dict],
     (chunk_dir / "frames.jsonl").write_text(
         "".join(json.dumps(f) + "\n" for f in members))
     if members and members[0].get("lat") is not None:
-        (chunk_dir / "corridor.json").write_text(json.dumps(
-            corridor_mod.build(members, origin, **corridor_cfg), indent=1))
+        corridor_mod.write_envelope(
+            chunk_dir, corridor_mod.build(members, origin, **corridor_cfg))
     cams = frames_dir / "cameras.json"
     if cams.exists():
         (chunk_dir / "cameras.json").write_text(cams.read_text())

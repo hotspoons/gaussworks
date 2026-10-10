@@ -6,7 +6,7 @@ camera went is, by construction, where a car can go -- so the same polyline
 that bounds the reconstruction also gives a sim its drivable ribbon, its
 collision surface, and (once you drive it in-game) its AI spline.
 
-Emitted from `world/corridor.json`:
+Emitted from `world/envelope.json` (`corridor.json` in captures made before 2026-10-10):
 
     road.obj        swept ribbon along each pass, ready for Blender/ksEditor
     centerline.obj  the bare polylines
@@ -23,6 +23,7 @@ import json
 import math
 from pathlib import Path
 
+from .corridor import envelope_path
 from .geo import enu_to_ll
 
 
@@ -78,7 +79,7 @@ def export(world_dir: Path, out: Path | None = None, width_m: float = 6.0,
         from .route import as_corridor                  # noqa: PLC0415
         corridor = as_corridor(json.loads(Path(route).read_text()))
     else:
-        corridor = json.loads((world_dir / "corridor.json").read_text())
+        corridor = json.loads(envelope_path(world_dir).read_text())
     origin = (corridor["origin"]["lat"], corridor["origin"]["lon"], 0.0)
 
     road_v, road_f, line_v, line_e = [], [], [], []

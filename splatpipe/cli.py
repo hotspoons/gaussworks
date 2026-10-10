@@ -296,7 +296,7 @@ def main():
     s.add_argument("--chunk", required=True, type=Path)
     s.add_argument("--out", type=Path)
     s.add_argument("--ckpt", type=Path)
-    s.add_argument("--corridor", type=Path, help="defaults to the chunk's corridor.json")
+    s.add_argument("--corridor", type=Path, help="defaults to the chunk's envelope.json")
     s.add_argument("--width", type=int, default=1280)
     s.add_argument("--height", type=int, default=720)
     s.add_argument("--fov", type=float, default=90.0)
@@ -305,7 +305,7 @@ def main():
     s.add_argument("--height-offset-m", type=float, default=0.0,
                    help="raise/lower from the original lens height")
     s.add_argument("--pass", dest="pass_index", type=int,
-                   help="render this corridor pass (0-based, in corridor.json "
+                   help="render this corridor pass (0-based, in envelope.json "
                         "order) instead of the longest one")
     s.add_argument("--all-passes", action="store_true",
                    help="render every pass, one video each (drive_passN.mp4)")
@@ -522,7 +522,8 @@ def main():
                   fps=args.fps, height_offset_m=args.height_offset_m)
         if args.all_passes:
             import json as _json
-            cor = _json.loads(Path(args.corridor or args.chunk / "corridor.json").read_text())
+            from .corridor import envelope_path  # noqa: PLC0415
+            cor = _json.loads(Path(args.corridor or envelope_path(args.chunk)).read_text())
             out = Path(args.out or args.chunk / "drive")
             for i in range(len(cor.get("passes") or [])):
                 render(args.chunk, out / f"pass{i}", pass_index=i, **kw)

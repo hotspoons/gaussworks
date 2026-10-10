@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from . import ply
+from .corridor import ENVELOPE_FILE, envelope_path, write_envelope
 from .guardrail import world_corridor
 
 
@@ -101,7 +102,7 @@ def merge(chunks_dir: Path, out: Path, prune_corridor: bool = True,
                 (pts[:, 1] >= y0) & (pts[:, 1] < y1))
         owned = int(keep.sum())
 
-        corridor_path = chunk / "corridor.json"
+        corridor_path = envelope_path(chunk)
         if prune_corridor and corridor_path.exists():
             corridor = json.loads(corridor_path.read_text())
             keep &= _corridor_mask(pts, corridor)
@@ -120,11 +121,11 @@ def merge(chunks_dir: Path, out: Path, prune_corridor: bool = True,
     # one leash for the whole world: viewers clamp cameras to it, the game
     # takes it as the drivable centreline (see guardrail.py)
     corridor = world_corridor(chunks_dir)
-    (out / "corridor.json").write_text(json.dumps(corridor, indent=1))
+    write_envelope(out, corridor)
 
     world = {"frame": "enu", "origin": index["origin"], "cell_m": index["cell_m"],
              "gaussians": kept_total, "source_gaussians": raw_total,
-             "corridor_pruned": prune_corridor, "corridor": "corridor.json",
+             "corridor_pruned": prune_corridor, "corridor": ENVELOPE_FILE,
              "corridor_passes": len(corridor["passes"]), "tiles": tiles}
     (out / "world.json").write_text(json.dumps(world, indent=1))
 

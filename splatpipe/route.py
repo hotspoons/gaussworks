@@ -25,6 +25,8 @@ import json
 import math
 from pathlib import Path
 
+from .corridor import envelope_path
+
 
 def _polyline(pas, flip=False):
     pts = [tuple(p) for p in pas["points"]]
@@ -105,7 +107,7 @@ def build(corridor: dict, join_m: float = 60.0, dedupe_tol_m: float = 20.0,
 
 def build_from_world(world_dir: Path, out: Path | None = None, **kw) -> Path:
     world_dir = Path(world_dir)
-    corridor = json.loads((world_dir / "corridor.json").read_text())
+    corridor = json.loads(envelope_path(world_dir).read_text())
     route = build(corridor, **kw)
     path = Path(out or world_dir / "route.json")
     path.write_text(json.dumps(route, indent=1))

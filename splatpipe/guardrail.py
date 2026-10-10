@@ -10,13 +10,15 @@ onto the nearest observed path and pull it back if it strayed too far.
 The same primitive serves the game: the corridor centreline is the drivable
 line, `clamp` is the barrier, and `distance` is how far off-road you are.
 
-Pure geometry over `corridor.json` (see corridor.py) -- no renderer, no engine,
+Pure geometry over `envelope.json` (see corridor.py) -- no renderer, no engine,
 so a web viewer, Unity, or a Python notebook can all use it.
 """
 
 import json
 import math
 from pathlib import Path
+
+from .corridor import envelope_path
 
 
 def _segments(corridor: dict):
@@ -95,7 +97,7 @@ def world_corridor(chunks_dir: Path) -> dict:
     index = json.loads((Path(chunks_dir) / "chunks.json").read_text())
     passes, radius, lo, hi = [], 0.0, math.inf, -math.inf
     for entry in index["chunks"]:
-        path = Path(chunks_dir) / entry["chunk"] / "corridor.json"
+        path = envelope_path(Path(chunks_dir) / entry["chunk"])
         if not path.exists():
             continue
         cor = json.loads(path.read_text())

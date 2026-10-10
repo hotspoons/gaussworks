@@ -38,6 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .corridor import envelope_path
+
 
 def _load_parser(chunk: Path, factor: int = 1):
     """Reuse gsplat's own COLMAP parser so poses match training exactly."""
@@ -164,7 +166,7 @@ def build(chunk: Path, ckpt: Path | None = None, out: Path | None = None,
     print(f"[mesh] fused surface: {len(mesh.vertices)} verts, "
           f"{len(mesh.triangles)} tris", flush=True)
 
-    corridor_path = chunk / "corridor.json"
+    corridor_path = envelope_path(chunk)
     if corridor_path.exists():
         from .merge import _corridor_mask         # noqa: PLC0415
         corridor = json.loads(corridor_path.read_text())

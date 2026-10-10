@@ -21,7 +21,9 @@ ref = {}
 for line in open(chunk / "geo_enu.txt"):
     n, x, y, z = line.split(); ref[n] = np.array([float(x), float(y), float(z)])
 corp = chunk / "corridor_gps.json"
-cor = json.load(open(corp if corp.exists() else chunk / "corridor.json"))
+# the envelope: envelope.json, or corridor.json in a chunk made before 2026-10-10
+env = chunk / "envelope.json"
+cor = json.load(open(corp if corp.exists() else env if env.exists() else chunk / "corridor.json"))
 ranges = [tuple(p["seq_range"]) for p in cor["passes"]]
 pass_of = lambda seq: next((i for i, (a, b) in enumerate(ranges) if a <= seq <= b), -1)
 rows = []

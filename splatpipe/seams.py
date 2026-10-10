@@ -22,6 +22,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .corridor import envelope_path
+
 # How close two corridor points must be, in metres, to count as "the same
 # place". The corridor is sampled along the driven line, so this wants to be a
 # little larger than that sampling or genuinely coincident passes are missed.
@@ -80,7 +82,7 @@ def measure(chunks_dir: Path, within=None, min_inside=0.30):
     for d in sorted(chunks_dir.glob("chunk_*")):
         if keep is not None and d.name not in keep:
             continue
-        p = d / "corridor.json"
+        p = envelope_path(d)
         if not p.exists():
             continue
         pts = [q for ps in json.loads(p.read_text()).get("passes") or []
@@ -88,7 +90,7 @@ def measure(chunks_dir: Path, within=None, min_inside=0.30):
         if pts:
             tracks[d.name] = np.asarray(pts, dtype=float)
     if not tracks:
-        raise SystemExit(f"no chunk under {chunks_dir} has a corridor.json to compare")
+        raise SystemExit(f"no chunk under {chunks_dir} has an envelope.json to compare")
 
     grid = {}
     for name, P in tracks.items():

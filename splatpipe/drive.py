@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .corridor import envelope_path
+
 
 def _resample(points: np.ndarray, spacing_m: float) -> np.ndarray:
     """Even spacing along a polyline, so speed is constant regardless of how
@@ -114,7 +116,7 @@ def render(chunk: Path, out: Path | None = None, ckpt: Path | None = None,
     chunk = Path(chunk)
     out = Path(out or chunk / "drive")
     out.mkdir(parents=True, exist_ok=True)
-    corridor_path = Path(corridor or chunk / "corridor.json")
+    corridor_path = Path(corridor or envelope_path(chunk))
     cor = json.loads(corridor_path.read_text())
 
     passes = cor.get("passes") or cor.get("points") and [{"points": cor["points"]}]

@@ -42,7 +42,7 @@ any camera with a profile (.360, .insv,        Mapillary sequences (equirect + G
   [2] chunk        locality grid: ~200m cells + halo. Every pass through a
         │            cell feeds that cell's chunk, so driving a road twice
         │            strengthens one reconstruction instead of making two.
-        │            Also emits corridor.json (observed envelope) per chunk.
+        │            Also emits envelope.json (observed envelope) per chunk.
         ▼
   [3] poses        per chunk: COLMAP features → spatial matching (GPS priors)
         │            → mapper (GLOMAP if present) → model_aligner to ENU
@@ -53,8 +53,15 @@ any camera with a profile (.360, .insv,        Mapillary sequences (equirect + G
   [5] merge        chunks -> world: each cell contributes only the gaussians
         │            it owns (halo donates observations, not geometry), floaters
         ▼            outside the capture corridor are pruned
-     world/tiles/chunk_xN_yN.ply + world.json   (LOD hierarchy: next milestone)
+     world/tiles/chunk_xN_yN.ply + world.json + envelope.json   (LOD hierarchy: next milestone)
 ```
+
+**The envelope file is `envelope.json`** (since 2026-10-10; `ENVELOPE_FILE` in
+`splatpipe/corridor.py`). Captures made before then have it as `corridor.json`. splatpipe still
+reads that name wherever `envelope.json` is absent, but the game reads `envelope.json` only, so
+before an older capture moves to a new deployment rename its envelope files in place:
+`python scripts/rename-envelope.py [--dry-run] <capture or world dir>` (it also points
+`world.json` at the new name; `corridor_gps.json` keeps its name).
 
 Stages 3 and 4 pull work from a claim-based queue on shared storage, so any
 number of workers on any number of nodes can be pointed at the same chunk

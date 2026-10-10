@@ -431,7 +431,7 @@ that will bite a fresh pod:
    canopy with an unconverged fix: 15-19 m horizontal and 10 m vertical error
    for the first ~80 positions, ~1 m after that, while SfM stayed at 0.75 px.
    The alignment residual (9.7 m mean) was entirely this. `poses` now rebuilds
-   `corridor.json` from the solved cameras, so drive/merge/export use the
+   the envelope (`envelope.json`; `corridor.json` before 2026-10-10) from the solved cameras, so drive/merge/export use the
    truth; but chunking and spatial-matching priors still come from GPS, so
    power the camera on and let it settle in the open before recording.
 14. **Black SfM points are a dead training initialisation.** gsplat colours

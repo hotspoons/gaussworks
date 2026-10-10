@@ -34,7 +34,7 @@ notebook can all use it"*.
 For a trail that is an unusually clean fit, because **the rail is the trail**.
 trailworks already holds the trail geometry; the capture corridor is the same
 line, recovered independently from the capture itself. A railed flythrough is
-`corridor.json` plus a lookahead — not a new abstraction.
+`envelope.json` plus a lookahead — not a new abstraction.
 
 ## What changes for foot and bike capture
 
@@ -174,7 +174,7 @@ and the rail clips scenery the walker actually saw.
 ## The viewer
 
 Does not exist. The pieces it needs — `merge.py` tiles plus `world.json`,
-`corridor.json`, `route.json` — do.
+`envelope.json`, `route.json` — do.
 
 **Renderer candidates**, all MIT and therefore fine to bundle in an Apache-2.0
 project (confirm before shipping):

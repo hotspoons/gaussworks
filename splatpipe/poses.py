@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from .corridor import envelope_path
 from .workqueue import WorkQueue
 
 
@@ -87,7 +88,7 @@ def _rig_size(chunk: Path) -> tuple[int, int]:
 
     meta.json's `passes` is the list of source VIDEOS, which undercounts: one
     chapter can drive through a cell several times (the street run passes the
-    house three times in GS010002 alone). corridor.json already splits the
+    house three times in GS010002 alone). envelope.json already splits the
     chunk's frames into contiguous drives by gap and by video, so its pass
     count is the honest one; take the larger of the two.
     """
@@ -96,7 +97,7 @@ def _rig_size(chunk: Path) -> tuple[int, int]:
     n_pass = 1
     if meta_path.exists():
         n_pass = max(1, len(json.loads(meta_path.read_text()).get("passes") or []))
-    corridor = chunk / "corridor.json"
+    corridor = envelope_path(chunk)
     if corridor.exists():
         n_pass = max(n_pass, len(json.loads(corridor.read_text()).get("passes") or []))
     return n_cams, n_pass
@@ -164,7 +165,7 @@ def _pass_connectivity(chunk: Path, db: Path, weak_ratio: float = 0.05) -> None:
     the mapper spends an hour on it. Diagnostic only: splitting is a chunking
     decision, so this prints what to do rather than doing it.
     """
-    cor_path = chunk / "corridor.json"
+    cor_path = envelope_path(chunk)
     if not cor_path.exists():
         return
     passes = json.loads(cor_path.read_text()).get("passes") or []

@@ -19,6 +19,32 @@ from pathlib import Path
 
 from .geo import ll_to_enu
 
+#: The envelope's file name in a chunk directory and in a merged world. Every writer writes this.
+ENVELOPE_FILE = "envelope.json"
+#: The name captures made before 2026-10-10 wrote. Still READ wherever ENVELOPE_FILE is absent, so
+#: old chunk and world directories keep working; scripts/rename-envelope.py renames them in place
+#: (do that before another deployment reads them: the game reads envelope.json only).
+LEGACY_ENVELOPE_FILE = "corridor.json"
+
+
+def envelope_path(d) -> Path:
+    """The envelope file to READ in directory `d`: ENVELOPE_FILE, else the legacy name when only
+    that exists. With neither, ENVELOPE_FILE's path, so `.exists()` and messages name the new file."""
+    d = Path(d)
+    p = d / ENVELOPE_FILE
+    if not p.exists() and (d / LEGACY_ENVELOPE_FILE).exists():
+        return d / LEGACY_ENVELOPE_FILE
+    return p
+
+
+def write_envelope(d, envelope: dict) -> Path:
+    """Write `envelope` as <d>/ENVELOPE_FILE, and drop a legacy-named copy it supersedes."""
+    d = Path(d)
+    p = d / ENVELOPE_FILE
+    p.write_text(json.dumps(envelope, indent=1))
+    (d / LEGACY_ENVELOPE_FILE).unlink(missing_ok=True)
+    return p
+
 
 def _runs(frames, origin, gap_m, gap_s=30.0):
     """Split a chunk's frames into contiguous camera passes.
@@ -167,16 +193,16 @@ def _chunk_frames(chunk: Path) -> list[dict]:
 
 
 def refresh_from_sparse(chunk: Path, **cfg) -> dict | None:
-    """Replace <chunk>/corridor.json with the SfM corridor, keeping the GPS
-    one as corridor_gps.json. Called by poses after alignment."""
+    """Replace <chunk>/envelope.json (ENVELOPE_FILE) with the SfM corridor, keeping
+    the GPS one as corridor_gps.json. Called by poses after alignment."""
     chunk = Path(chunk)
     cor = from_sparse(chunk, **cfg)
     if cor is None:
         return None
-    old = chunk / "corridor.json"
+    old = envelope_path(chunk)
     if old.exists() and json.loads(old.read_text()).get("source", "gps") == "gps":
         old.replace(chunk / "corridor_gps.json")
-    old.write_text(json.dumps(cor, indent=1))
+    write_envelope(chunk, cor)
     print(f"[corridor] {chunk.name}: rebuilt from SfM -- {len(cor['passes'])} pass(es), "
           f"{cor['registered_positions']}/{cor['positions']} positions registered",
           flush=True)

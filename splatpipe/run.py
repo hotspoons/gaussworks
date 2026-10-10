@@ -84,7 +84,7 @@ def _seam_gate(chunks: Path, fail_over: float | None, out: Path | None = None,
                advisory: bool = False) -> dict:
     """Decide whether this world is worth training, and record the verdict.
 
-    Seam agreement reads corridor.json, which POSES produces -- so a world can
+    Seam agreement reads envelope.json, which POSES produces -- so a world can
     be judged driveable before a single GPU-hour goes into training. On the
     arrowhead re-bake that is ~2 GPU-hours against ~11, which is the difference
     between iterating on a neighbourhood and not.
